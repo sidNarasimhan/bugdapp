@@ -1,0 +1,47 @@
+{
+  "name": "Simple Wallet Connect",
+  "startUrl": "https://example-dapp.com",
+  "durationMs": 15000,
+  "steps": [
+    {
+      "id": "step-1",
+      "type": "click",
+      "timestamp": 1000,
+      "selector": "[data-testid=\"connect-wallet-button\"]",
+      "metadata": {
+        "dataTestId": "connect-wallet-button",
+        "tagName": "button",
+        "text": "Connect Wallet"
+      }
+    },
+    {
+      "id": "step-2",
+      "type": "click",
+      "timestamp": 2000,
+      "selector": "button:has-text(\"MetaMask\")",
+      "metadata": {
+        "tagName": "button",
+        "text": "MetaMask"
+      }
+    },
+    {
+      "id": "step-3",
+      "type": "web3",
+      "timestamp": 2100,
+      "web3Method": "eth_requestAccounts",
+      "web3ProviderInfo": {
+        "name": "MetaMask",
+        "rdns": "io.metamask"
+      },
+      "web3Result": ["0xabc123..."]
+    },
+    {
+      "id": "step-4",
+      "type": "web3",
+      "timestamp": 5000,
+      "web3Method": "eth_chainId",
+      "chainId": 1,
+      "web3Result": "0x1"
+    }
+  ]
+}

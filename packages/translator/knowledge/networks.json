@@ -1,0 +1,202 @@
+[
+  {
+    "chainId": 1,
+    "name": "Ethereum Mainnet",
+    "rpcUrl": "https://eth.llamarpc.com",
+    "symbol": "ETH",
+    "blockExplorer": "https://etherscan.io",
+    "isTestnet": false
+  },
+  {
+    "chainId": 5,
+    "name": "Goerli Testnet",
+    "rpcUrl": "https://rpc.ankr.com/eth_goerli",
+    "symbol": "ETH",
+    "blockExplorer": "https://goerli.etherscan.io",
+    "isTestnet": true
+  },
+  {
+    "chainId": 11155111,
+    "name": "Sepolia Testnet",
+    "rpcUrl": "https://rpc.sepolia.org",
+    "symbol": "ETH",
+    "blockExplorer": "https://sepolia.etherscan.io",
+    "isTestnet": true
+  },
+  {
+    "chainId": 8453,
+    "name": "Base",
+    "rpcUrl": "https://mainnet.base.org",
+    "symbol": "ETH",
+    "blockExplorer": "https://basescan.org",
+    "isTestnet": false
+  },
+  {
+    "chainId": 84531,
+    "name": "Base Goerli",
+    "rpcUrl": "https://goerli.base.org",
+    "symbol": "ETH",
+    "blockExplorer": "https://goerli.basescan.org",
+    "isTestnet": true
+  },
+  {
+    "chainId": 84532,
+    "name": "Base Sepolia",
+    "rpcUrl": "https://sepolia.base.org",
+    "symbol": "ETH",
+    "blockExplorer": "https://sepolia.basescan.org",
+    "isTestnet": true
+  },
+  {
+    "chainId": 42161,
+    "name": "Arbitrum One",
+    "rpcUrl": "https://arb1.arbitrum.io/rpc",
+    "symbol": "ETH",
+    "blockExplorer": "https://arbiscan.io",
+    "isTestnet": false
+  },
+  {
+    "chainId": 421613,
+    "name": "Arbitrum Goerli",
+    "rpcUrl": "https://goerli-rollup.arbitrum.io/rpc",
+    "symbol": "ETH",
+    "blockExplorer": "https://goerli.arbiscan.io",
+    "isTestnet": true
+  },
+  {
+    "chainId": 421614,
+    "name": "Arbitrum Sepolia",
+    "rpcUrl": "https://sepolia-rollup.arbitrum.io/rpc",
+    "symbol": "ETH",
+    "blockExplorer": "https://sepolia.arbiscan.io",
+    "isTestnet": true
+  },
+  {
+    "chainId": 10,
+    "name": "Optimism",
+    "rpcUrl": "https://mainnet.optimism.io",
+    "symbol": "ETH",
+    "blockExplorer": "https://optimistic.etherscan.io",
+    "isTestnet": false
+  },
+  {
+    "chainId": 420,
+    "name": "Optimism Goerli",
+    "rpcUrl": "https://goerli.optimism.io",
+    "symbol": "ETH",
+    "blockExplorer": "https://goerli-optimism.etherscan.io",
+    "isTestnet": true
+  },
+  {
+    "chainId": 137,
+    "name": "Polygon",
+    "rpcUrl": "https://polygon-rpc.com",
+    "symbol": "MATIC",
+    "blockExplorer": "https://polygonscan.com",
+    "isTestnet": false
+  },
+  {
+    "chainId": 80001,
+    "name": "Polygon Mumbai",
+    "rpcUrl": "https://rpc-mumbai.maticvigil.com",
+    "symbol": "MATIC",
+    "blockExplorer": "https://mumbai.polygonscan.com",
+    "isTestnet": true
+  },
+  {
+    "chainId": 56,
+    "name": "BNB Smart Chain",
+    "rpcUrl": "https://bsc-dataseed.binance.org",
+    "symbol": "BNB",
+    "blockExplorer": "https://bscscan.com",
+    "isTestnet": false
+  },
+  {
+    "chainId": 97,
+    "name": "BNB Smart Chain Testnet",
+    "rpcUrl": "https://data-seed-prebsc-1-s1.binance.org:8545",
+    "symbol": "tBNB",
+    "blockExplorer": "https://testnet.bscscan.com",
+    "isTestnet": true
+  },
+  {
+    "chainId": 43114,
+    "name": "Avalanche C-Chain",
+    "rpcUrl": "https://api.avax.network/ext/bc/C/rpc",
+    "symbol": "AVAX",
+    "blockExplorer": "https://snowtrace.io",
+    "isTestnet": false
+  },
+  {
+    "chainId": 43113,
+    "name": "Avalanche Fuji Testnet",
+    "rpcUrl": "https://api.avax-test.network/ext/bc/C/rpc",
+    "symbol": "AVAX",
+    "blockExplorer": "https://testnet.snowtrace.io",
+    "isTestnet": true
+  },
+  {
+    "chainId": 250,
+    "name": "Fantom Opera",
+    "rpcUrl": "https://rpc.ftm.tools",
+    "symbol": "FTM",
+    "blockExplorer": "https://ftmscan.com",
+    "isTestnet": false
+  },
+  {
+    "chainId": 324,
+    "name": "zkSync Era",
+    "rpcUrl": "https://mainnet.era.zksync.io",
+    "symbol": "ETH",
+    "blockExplorer": "https://explorer.zksync.io",
+    "isTestnet": false
+  },
+  {
+    "chainId": 280,
+    "name": "zkSync Era Testnet",
+    "rpcUrl": "https://testnet.era.zksync.dev",
+    "symbol": "ETH",
+    "blockExplorer": "https://goerli.explorer.zksync.io",
+    "isTestnet": true
+  },
+  {
+    "chainId": 59144,
+    "name": "Linea",
+    "rpcUrl": "https://rpc.linea.build",
+    "symbol": "ETH",
+    "blockExplorer": "https://lineascan.build",
+    "isTestnet": false
+  },
+  {
+    "chainId": 534352,
+    "name": "Scroll",
+    "rpcUrl": "https://rpc.scroll.io",
+    "symbol": "ETH",
+    "blockExplorer": "https://scrollscan.com",
+    "isTestnet": false
+  },
+  {
+    "chainId": 1101,
+    "name": "Polygon zkEVM",
+    "rpcUrl": "https://zkevm-rpc.com",
+    "symbol": "ETH",
+    "blockExplorer": "https://zkevm.polygonscan.com",
+    "isTestnet": false
+  },
+  {
+    "chainId": 81457,
+    "name": "Blast",
+    "rpcUrl": "https://rpc.blast.io",
+    "symbol": "ETH",
+    "blockExplorer": "https://blastscan.io",
+    "isTestnet": false
+  },
+  {
+    "chainId": 7777777,
+    "name": "Zora",
+    "rpcUrl": "https://rpc.zora.energy",
+    "symbol": "ETH",
+    "blockExplorer": "https://explorer.zora.energy",
+    "isTestnet": false
+  }
+]

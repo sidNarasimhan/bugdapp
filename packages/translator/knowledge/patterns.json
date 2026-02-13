@@ -1,0 +1,200 @@
+{
+  "patterns": {
+    "wallet_connect": {
+      "description": "Wallet connection flow - user clicks connect, selects wallet, approves in wallet popup",
+      "indicators": {
+        "web3Methods": ["eth_requestAccounts"],
+        "buttonTexts": ["connect", "wallet", "login", "sign in"],
+        "testIds": ["connect-wallet", "login-button", "wallet-connect"]
+      },
+      "expectedSteps": [
+        "Click connect/login button on dApp",
+        "Select wallet type (MetaMask, Rabby, etc.)",
+        "Approve connection in wallet popup"
+      ],
+      "metamaskHandling": {
+        "popupButton": "Connect",
+        "timeout": 10000
+      }
+    },
+    "wallet_sign": {
+      "description": "Signature request - dApp requests user to sign a message",
+      "indicators": {
+        "web3Methods": ["personal_sign", "eth_sign", "eth_signTypedData", "eth_signTypedData_v3", "eth_signTypedData_v4"],
+        "buttonTexts": ["sign", "agree", "confirm", "accept"],
+        "testIds": ["sign-button", "agree-tos", "tnc-sign"]
+      },
+      "expectedSteps": [
+        "Click sign button on dApp",
+        "Approve signature in wallet popup"
+      ],
+      "metamaskHandling": {
+        "popupButton": "Confirm",
+        "timeout": 15000,
+        "note": "MetaMask uses 'Confirm' not 'Sign' for signature requests"
+      }
+    },
+    "wallet_approve": {
+      "description": "Token approval - user approves a contract to spend tokens",
+      "indicators": {
+        "web3Methods": ["eth_sendTransaction"],
+        "buttonTexts": ["approve", "enable", "allow"],
+        "testIds": ["approve-button", "token-approve"]
+      },
+      "expectedSteps": [
+        "Click approve button on dApp",
+        "Confirm approval transaction in wallet popup",
+        "Wait for transaction confirmation"
+      ],
+      "metamaskHandling": {
+        "popupButton": "/confirm/i",
+        "timeout": 15000,
+        "postWait": 5000
+      }
+    },
+    "network_switch": {
+      "description": "Network switch - dApp requests switching to a different chain",
+      "indicators": {
+        "web3Methods": ["wallet_switchEthereumChain", "wallet_addEthereumChain"],
+        "buttonTexts": ["switch network", "wrong network", "change network"],
+        "testIds": ["network-switch", "switch-network"]
+      },
+      "expectedSteps": [
+        "dApp detects wrong network",
+        "Click switch network button",
+        "Approve network switch in wallet popup"
+      ],
+      "metamaskHandling": {
+        "popupButton": "/switch network|approve/i",
+        "timeout": 10000
+      }
+    },
+    "trade_open": {
+      "description": "Opening a trading position (perpetuals, leverage trading)",
+      "indicators": {
+        "web3Methods": ["eth_sendTransaction"],
+        "buttonTexts": ["trade", "long", "short", "buy", "sell", "place order", "open position"],
+        "testIds": ["place-order", "trade-button", "confirm-trade"]
+      },
+      "expectedSteps": [
+        "Set trade parameters (pair, leverage, amount)",
+        "Click place order/trade button",
+        "Click confirm button if modal appears",
+        "Confirm transaction in wallet popup",
+        "Wait for transaction confirmation"
+      ],
+      "metamaskHandling": {
+        "popupButton": "/confirm/i",
+        "timeout": 15000,
+        "postWait": 5000
+      }
+    },
+    "token_swap": {
+      "description": "Token swap on DEX (Uniswap, etc.)",
+      "indicators": {
+        "web3Methods": ["eth_sendTransaction"],
+        "buttonTexts": ["swap", "exchange", "trade"],
+        "testIds": ["swap-button", "execute-swap"]
+      },
+      "expectedSteps": [
+        "Select input token",
+        "Enter amount",
+        "Select output token",
+        "Click swap button",
+        "Confirm swap in modal",
+        "Confirm transaction in wallet popup"
+      ],
+      "metamaskHandling": {
+        "popupButton": "/confirm/i",
+        "timeout": 15000,
+        "postWait": 5000
+      }
+    },
+    "defi_deposit": {
+      "description": "Deposit into DeFi protocol (lending, staking, etc.)",
+      "indicators": {
+        "web3Methods": ["eth_sendTransaction"],
+        "buttonTexts": ["deposit", "stake", "supply", "add liquidity"],
+        "testIds": ["deposit-button", "stake-button"]
+      },
+      "expectedSteps": [
+        "Enter deposit amount",
+        "Approve token if needed",
+        "Click deposit button",
+        "Confirm transaction in wallet popup"
+      ],
+      "metamaskHandling": {
+        "popupButton": "/confirm/i",
+        "timeout": 15000,
+        "postWait": 5000
+      }
+    },
+    "defi_withdraw": {
+      "description": "Withdraw from DeFi protocol",
+      "indicators": {
+        "web3Methods": ["eth_sendTransaction"],
+        "buttonTexts": ["withdraw", "unstake", "remove liquidity", "claim"],
+        "testIds": ["withdraw-button", "unstake-button", "claim-button"]
+      },
+      "expectedSteps": [
+        "Enter withdrawal amount or click max",
+        "Click withdraw button",
+        "Confirm transaction in wallet popup"
+      ],
+      "metamaskHandling": {
+        "popupButton": "/confirm/i",
+        "timeout": 15000,
+        "postWait": 5000
+      }
+    }
+  },
+  "commonSelectors": {
+    "walletButtons": {
+      "connect": [
+        "[data-testid='connect-wallet']",
+        "[data-testid='login-button']",
+        "button:has-text('Connect')",
+        "button:has-text('Login')"
+      ],
+      "metamask": [
+        "button:has-text('MetaMask')",
+        "[data-testid='metamask']",
+        "img[alt='MetaMask']"
+      ]
+    },
+    "tradeInputs": {
+      "amount": [
+        "[data-testid='collateral-input']",
+        "input[placeholder*='amount']",
+        "input[type='number']"
+      ],
+      "leverage": [
+        "[data-testid='leverage-input']",
+        "input[placeholder*='leverage']"
+      ]
+    },
+    "confirmButtons": [
+      "[data-testid='confirm-trade-button']",
+      "[data-testid='confirm-button']",
+      "button:has-text('Confirm')"
+    ]
+  },
+  "waitStrategies": {
+    "afterWalletConnect": {
+      "default": 2000,
+      "description": "Wait after wallet connection for dApp to update UI"
+    },
+    "afterSignature": {
+      "default": 2000,
+      "description": "Wait after signature for dApp to process"
+    },
+    "afterTransaction": {
+      "default": 5000,
+      "description": "Wait after transaction for on-chain confirmation"
+    },
+    "afterNetworkSwitch": {
+      "default": 3000,
+      "description": "Wait after network switch for dApp to reconnect"
+    }
+  }
+}

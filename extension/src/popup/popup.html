@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="popup.css">
+  <title>Web3 Test Recorder</title>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="../icon128.png" alt="Web3 Test" width="48" height="48" />
+      <h1>Web3 Test Recorder</h1>
+    </div>
+
+    <!-- Recording Controls -->
+    <div id="recording-controls">
+      <div id="status-section">
+        <div id="status-indicator" class="status idle"></div>
+        <span id="status-text">Ready to record</span>
+      </div>
+
+      <button id="toggle-btn" class="btn btn-primary">
+        Start Recording
+      </button>
+
+      <div id="recording-info" class="hidden">
+        <p>Recording on: <span id="current-url"></span></p>
+        <p>Steps: <span id="step-count">0</span></p>
+      </div>
+    </div>
+
+    <!-- Step Preview (shown after stopping) -->
+    <div id="preview-section" class="hidden">
+      <h2>Recorded Steps</h2>
+
+      <div id="step-list" class="step-list">
+        <!-- Steps will be rendered here -->
+      </div>
+
+      <div class="save-section">
+        <label for="project-select">Project:</label>
+        <select id="project-select">
+          <option value="">(No project)</option>
+        </select>
+
+        <label for="test-name">Test Name:</label>
+        <input
+          type="text"
+          id="test-name"
+          placeholder="Enter test name..."
+          required
+        />
+
+        <div class="button-row">
+          <button id="discard-btn" class="btn btn-secondary">
+            Discard
+          </button>
+          <button id="save-btn" class="btn btn-primary" disabled>
+            Export Test
+          </button>
+        </div>
+      </div>
+
+      <div id="save-status" class="hidden"></div>
+    </div>
+
+    <div id="error-message" class="error hidden"></div>
+  </div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

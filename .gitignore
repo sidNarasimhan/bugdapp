@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.next/
+*.png
+*.zip
+*.log
+.env
+test-results/
+debug-screenshots/
+trace-debug/
+.cache-synpress/
+*.tsbuildinfo
+.vscode/

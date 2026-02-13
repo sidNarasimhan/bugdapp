@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Web3 Test Recorder - Settings</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background-color: #000000;
+      color: #e4e4e7;
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin-bottom: 8px;
+      color: #fafafa;
+    }
+
+    .subtitle {
+      color: #71717a;
+      margin-bottom: 32px;
+    }
+
+    .section {
+      background-color: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #a1a1aa;
+      margin-bottom: 16px;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 6px;
+      color: #d4d4d8;
+    }
+
+    .input-hint {
+      font-size: 12px;
+      color: #71717a;
+      margin-top: 4px;
+    }
+
+    input[type="text"],
+    input[type="url"],
+    input[type="password"] {
+      width: 100%;
+      padding: 10px 12px;
+      font-size: 14px;
+      background-color: #09090b;
+      border: 1px solid #27272a;
+      border-radius: 6px;
+      color: #e4e4e7;
+      transition: border-color 0.2s;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #52525b;
+    }
+
+    input::placeholder {
+      color: #52525b;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    button {
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-primary {
+      background-color: #ffffff;
+      color: #000000;
+    }
+
+    .btn-primary:hover {
+      background-color: #e4e4e7;
+    }
+
+    .btn-primary:disabled {
+      background-color: #27272a;
+      color: #71717a;
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background-color: #18181b;
+      color: #e4e4e7;
+      border: 1px solid #27272a;
+    }
+
+    .btn-secondary:hover {
+      background-color: #27272a;
+    }
+
+    .status {
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      margin-top: 16px;
+      display: none;
+    }
+
+    .status.show {
+      display: block;
+    }
+
+    .status.success {
+      background-color: rgba(34, 197, 94, 0.08);
+      border: 1px solid rgba(34, 197, 94, 0.2);
+      color: #4ade80;
+    }
+
+    .status.error {
+      background-color: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      color: #f87171;
+    }
+
+    .connection-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background-color: #09090b;
+      border: 1px solid #27272a;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    .connection-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #52525b;
+    }
+
+    .connection-dot.connected {
+      background-color: #22c55e;
+    }
+
+    .connection-dot.error {
+      background-color: #ef4444;
+    }
+
+    .info-box {
+      background-color: rgba(255, 255, 255, 0.03);
+      border: 1px solid #27272a;
+      border-radius: 6px;
+      padding: 12px;
+      font-size: 13px;
+      color: #a1a1aa;
+      margin-top: 16px;
+    }
+
+    .info-box a {
+      color: #d4d4d8;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Settings</h1>
+    <p class="subtitle">Configure API connection for uploading recordings to the platform</p>
+
+    <div class="section">
+      <div class="section-title">API Connection</div>
+
+      <div class="form-group">
+        <label for="api-url">API Server URL</label>
+        <input
+          type="url"
+          id="api-url"
+          placeholder="http://127.0.0.1:3001"
+        />
+        <p class="input-hint">The URL of your Web3 Test Platform API server</p>
+      </div>
+
+      <div class="form-group">
+        <label for="api-key">API Key (Optional)</label>
+        <input
+          type="password"
+          id="api-key"
+          placeholder="w3t_xxxxxxxxxxxx"
+        />
+        <p class="input-hint">Your API key for authentication. Get one from the platform settings.</p>
+      </div>
+
+      <div class="connection-indicator" id="connection-status">
+        <div class="connection-dot" id="connection-dot"></div>
+        <span id="connection-text">Not tested</span>
+      </div>
+
+      <div class="button-group">
+        <button class="btn-primary" id="save-btn">Save Settings</button>
+        <button class="btn-secondary" id="test-btn">Test Connection</button>
+      </div>
+
+      <div class="status" id="status-message"></div>
+
+      <div class="info-box">
+        <strong>Tip:</strong> After saving, you can upload recordings directly to the platform
+        instead of exporting JSON files. The "Upload to Platform" button will appear in the
+        extension popup when a recording is ready.
+      </div>
+    </div>
+  </div>
+
+  <script src="settings.js"></script>
+</body>
+</html>

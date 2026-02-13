@@ -1,0 +1,228 @@
+# Web3 Test Platform - Docker Compose Configuration
+# Usage: docker-compose up -d
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: web3-test-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: web3test
+      POSTGRES_USER: web3test
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-web3testpass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U web3test -d web3test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for BullMQ job queue
+  redis:
+    image: redis:7-alpine
+    container_name: web3-test-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO for artifact storage (S3-compatible)
+  minio:
+    image: minio/minio:latest
+    container_name: web3-test-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"   # API
+      - "9001:9001"   # Console
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # API Service (Fastify)
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    container_name: web3-test-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql://web3test:${POSTGRES_PASSWORD:-web3testpass}@postgres:5432/web3test
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      MINIO_BUCKET: artifacts
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Dashboard Service (Next.js)
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/dashboard/Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=http://api:3001
+    container_name: web3-test-dashboard
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      NEXT_PUBLIC_API_URL: http://api:3001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Executor Worker Service
+  executor:
+    build:
+      context: .
+      dockerfile: docker/executor/Dockerfile
+    container_name: web3-test-executor
+    restart: unless-stopped
+    # Use tini as PID 1 to properly reap zombie Chrome/esbuild processes
+    init: true
+    environment:
+      NODE_ENV: production
+      MODE: worker
+      DATABASE_URL: postgresql://web3test:${POSTGRES_PASSWORD:-web3testpass}@postgres:5432/web3test
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      MINIO_BUCKET: artifacts
+      ARTIFACTS_PATH: /app/artifacts
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      VNC_PASSWORD: ${VNC_PASSWORD:-secret}
+      DISPLAY: ":99"
+      # Wallet setup for dappwright tests
+      SEED_PHRASE: ${SEED_PHRASE:-test test test test test test test test test test test junk}
+      DAPPWRIGHT_TEST_DIR: /app/dappwright-test
+      GENERATED_TESTS_DIR: /app/dappwright-test/test/playwright
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # Self-healing: translator needs API key for regeneration
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SELF_HEAL_MODEL: ${SELF_HEAL_MODEL:-claude-sonnet-4-5-20250929}
+      # Agent mode: model override for AI agent-driven execution
+      AGENT_MODEL: ${AGENT_MODEL:-claude-sonnet-4-5-20250929}
+    volumes:
+      - executor_artifacts:/app/artifacts
+    ports:
+      - "5900:5900"   # VNC
+      - "6080:6080"   # noVNC WebSocket
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    # Allow more resources for browser execution
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+    # Security: need --shm-size for Chrome
+    shm_size: '2gb'
+
+  # Optional: Additional executor workers (scale as needed)
+  # executor-2:
+  #   extends:
+  #     service: executor
+  #   container_name: web3-test-executor-2
+  #   ports:
+  #     - "5901:5900"
+  #     - "6081:6080"
+
+  # Initialize MinIO bucket
+  minio-init:
+    image: minio/mc:latest
+    container_name: web3-test-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin123};
+      mc mb --ignore-existing myminio/artifacts;
+      mc anonymous set download myminio/artifacts;
+      echo 'MinIO bucket initialized';
+      exit 0;
+      "
+
+  # Database migrations (run once)
+  db-migrate:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    container_name: web3-test-db-migrate
+    command: npx prisma migrate deploy
+    environment:
+      DATABASE_URL: postgresql://web3test:${POSTGRES_PASSWORD:-web3testpass}@postgres:5432/web3test
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+  executor_artifacts:
+    driver: local
+
+networks:
+  default:
+    name: web3-test-network
+    driver: bridge

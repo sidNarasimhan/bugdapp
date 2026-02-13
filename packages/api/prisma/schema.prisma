@@ -1,0 +1,307 @@
+// Prisma schema for Web3 dApp Testing Platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// Recordings - Uploaded JSON recordings from the extension
+// ============================================================================
+
+model Recording {
+  id          String   @id @default(cuid())
+  name        String
+  dappUrl     String
+  jsonData    Json     // The full recording JSON
+  metadata    Json?    // Additional metadata (browser, extension version, etc.)
+  chainId     Int?     // Detected chain ID
+  walletName  String?  // Detected wallet (Rabby, MetaMask, etc.)
+  stepCount   Int      @default(0)
+  testType    String   @default("connection") // 'connection' or 'flow'
+
+  // Optional project association
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id])
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  testSpecs   TestSpec[]
+
+  @@index([createdAt])
+  @@index([dappUrl])
+  @@index([projectId])
+}
+
+// ============================================================================
+// Test Specs - Generated Playwright/Synpress test code
+// ============================================================================
+
+model TestSpec {
+  id            String       @id @default(cuid())
+  recordingId   String
+  recording     Recording    @relation(fields: [recordingId], references: [id], onDelete: Cascade)
+
+  code          String       // Generated TypeScript code
+  version       Int          @default(1)
+  status        SpecStatus   @default(DRAFT)
+
+  // Analysis results
+  patterns      Json?        // Detected flow patterns
+  warnings      String[]     // Generation warnings
+
+  // Self-healing retry tracking
+  attempt       Int          @default(1)
+  maxAttempts   Int          @default(3)
+  parentSpecId  String?      // Previous spec in retry chain
+  parentSpec    TestSpec?    @relation("SpecRetryChain", fields: [parentSpecId], references: [id])
+  childSpecs    TestSpec[]   @relation("SpecRetryChain")
+  failureContext Json?       // Error context from previous attempt
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  // Relations
+  testRuns      TestRun[]
+  clarifications Clarification[]
+
+  @@index([recordingId])
+  @@index([status])
+}
+
+enum SpecStatus {
+  DRAFT           // Initial generation
+  NEEDS_REVIEW    // Has clarifications pending
+  READY           // Ready to run
+  TESTED          // Has been run at least once
+}
+
+// ============================================================================
+// Test Runs - Execution records
+// ============================================================================
+
+model TestRun {
+  id          String      @id @default(cuid())
+  testSpecId  String
+  testSpec    TestSpec    @relation(fields: [testSpecId], references: [id], onDelete: Cascade)
+
+  status      RunStatus   @default(PENDING)
+
+  // Timing
+  startedAt   DateTime?
+  completedAt DateTime?
+  durationMs  Int?
+
+  // Results
+  passed      Boolean?
+  error       String?     // Error message if failed
+  logs        String?     // Console output
+
+  // Environment
+  browser     String      @default("chromium")
+  headless    Boolean     @default(false)
+
+  // Streaming / Container info
+  containerId   String?     // Docker container ID
+  vncPort       Int?        // Assigned VNC port
+  streamingMode StreamMode  @default(NONE)
+
+  // Execution mode
+  executionMode ExecutionMode @default(SPEC)
+
+  // Agent replay data (steps + actions + usage for agent runs)
+  agentData     Json?
+
+  // Self-healing
+  isAutoRetry   Boolean     @default(false)
+
+  // Optional suite run association
+  suiteRunId  String?
+  suiteRun    SuiteRun?   @relation(fields: [suiteRunId], references: [id])
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  // Relations
+  artifacts   Artifact[]
+
+  @@index([testSpecId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([suiteRunId])
+}
+
+enum StreamMode {
+  NONE        // Headless, no streaming
+  VNC         // Live VNC streaming
+  VIDEO       // Post-run video only
+}
+
+enum ExecutionMode {
+  SPEC        // Traditional spec-based execution (Playwright runner)
+  AGENT       // AI agent-driven execution (real-time browser control)
+}
+
+enum RunStatus {
+  PENDING     // Queued for execution
+  RUNNING     // Currently executing
+  PASSED      // Completed successfully
+  FAILED      // Completed with failure
+  CANCELLED   // Cancelled by user
+  TIMEOUT     // Exceeded time limit
+}
+
+// ============================================================================
+// Artifacts - Screenshots, traces, videos from test runs
+// ============================================================================
+
+model Artifact {
+  id          String        @id @default(cuid())
+  testRunId   String
+  testRun     TestRun       @relation(fields: [testRunId], references: [id], onDelete: Cascade)
+
+  type        ArtifactType
+  name        String        // e.g., "screenshot-step-5.png"
+  storagePath String        // Path in S3 or local storage
+  stepName    String?       // Which step this artifact is from
+  mimeType    String?
+  sizeBytes   Int?
+
+  createdAt   DateTime      @default(now())
+
+  @@index([testRunId])
+  @@index([type])
+}
+
+enum ArtifactType {
+  SCREENSHOT
+  VIDEO
+  TRACE
+  HAR         // Network traffic
+  LOG
+}
+
+// ============================================================================
+// Clarifications - Questions that need user input
+// ============================================================================
+
+model Clarification {
+  id          String              @id @default(cuid())
+  testSpecId  String
+  testSpec    TestSpec            @relation(fields: [testSpecId], references: [id], onDelete: Cascade)
+
+  type        ClarificationType
+  question    String
+  context     String?             // Additional context for the question
+  stepIndex   Int?                // Which step this relates to
+  options     String[]            // Available choices
+
+  answer      String?             // User's answer
+  status      ClarificationStatus @default(PENDING)
+
+  createdAt   DateTime            @default(now())
+  answeredAt  DateTime?
+
+  @@index([testSpecId])
+  @@index([status])
+}
+
+enum ClarificationType {
+  SELECTOR    // Ambiguous element selector
+  WAIT        // Unclear wait condition
+  NETWORK     // Network configuration
+  ACTION      // Unclear action intent
+  GENERAL     // General question
+}
+
+enum ClarificationStatus {
+  PENDING     // Awaiting answer
+  ANSWERED    // User provided answer
+  SKIPPED     // User skipped
+}
+
+// ============================================================================
+// API Keys - Authentication for extension uploads
+// ============================================================================
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  name        String
+  keyHash     String    @unique
+  keyPrefix   String    // First 8 chars for identification
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime?
+
+  @@index([keyHash])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// Projects - Group tests by dApp with per-project wallets
+// ============================================================================
+
+model Project {
+  id               String      @id @default(cuid())
+  name             String
+  homeUrl          String
+  description      String?
+  seedPhrase       String      // BIP-39 mnemonic (plaintext for now)
+  walletAddress    String      // Derived from seedPhrase, shown to user
+  chainId          Int?
+  connectionSpecId String?     // Reference to verified connection spec for this project
+  dappContext      String?     // Markdown: dApp structure, wallet provider, UI patterns, verification hints
+
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  // Relations
+  recordings       Recording[]
+  suiteRuns        SuiteRun[]
+
+  @@index([createdAt])
+}
+
+// ============================================================================
+// Suite Runs - Sequential execution of all tests in a project
+// ============================================================================
+
+model SuiteRun {
+  id            String      @id @default(cuid())
+  projectId     String
+  project       Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  status        RunStatus   @default(PENDING)
+  specIds       String[]    // Ordered TestSpec IDs
+
+  // Timing
+  startedAt     DateTime?
+  completedAt   DateTime?
+  durationMs    Int?
+
+  // Results
+  totalTests    Int         @default(0)
+  passedTests   Int         @default(0)
+  failedTests   Int         @default(0)
+  error         String?
+  logs          String?
+
+  // Environment
+  headless      Boolean     @default(false)
+  streamingMode StreamMode  @default(NONE)
+
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  // Relations
+  testRuns      TestRun[]
+
+  @@index([projectId])
+  @@index([status])
+}

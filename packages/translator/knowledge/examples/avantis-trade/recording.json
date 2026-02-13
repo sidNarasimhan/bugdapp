@@ -1,0 +1,153 @@
+{
+  "name": "Avantis Trade Example",
+  "startUrl": "https://www.avantisfi.com/trade?asset=XAU-USD",
+  "durationMs": 78302,
+  "steps": [
+    {
+      "id": "step-1",
+      "type": "click",
+      "timestamp": 1770119166989,
+      "selector": "[data-testid=\"login-button\"]",
+      "metadata": {
+        "dataTestId": "login-button",
+        "tagName": "button",
+        "text": "Login"
+      }
+    },
+    {
+      "id": "step-2",
+      "type": "click",
+      "timestamp": 1770119168522,
+      "selector": "button:nth-child(7) div:nth-child(2)",
+      "metadata": {
+        "tagName": "div",
+        "text": "Continue with a wallet"
+      }
+    },
+    {
+      "id": "step-3",
+      "type": "click",
+      "timestamp": 1770119170232,
+      "selector": "div#privy-modal-content button:nth-child(2) span:nth-child(2)",
+      "metadata": {
+        "tagName": "span",
+        "text": "Rabby Wallet"
+      }
+    },
+    {
+      "id": "step-4",
+      "type": "web3",
+      "timestamp": 1770119170234,
+      "web3Method": "eth_requestAccounts",
+      "web3ProviderInfo": {
+        "name": "Rabby Wallet",
+        "rdns": "io.rabby"
+      },
+      "web3Result": ["0x110b143b8ec66fba497c1830fb985f7a3c3e4616"]
+    },
+    {
+      "id": "step-5",
+      "type": "web3",
+      "timestamp": 1770119175104,
+      "web3Method": "eth_chainId",
+      "chainId": 8453,
+      "web3ProviderInfo": {
+        "name": "Rabby Wallet"
+      },
+      "web3Result": "0x2105"
+    },
+    {
+      "id": "step-6",
+      "type": "click",
+      "timestamp": 1770119178065,
+      "selector": "[data-testid=\"tnc-sign-button\"]",
+      "metadata": {
+        "dataTestId": "tnc-sign-button",
+        "tagName": "button",
+        "text": "Sign"
+      }
+    },
+    {
+      "id": "step-7",
+      "type": "web3",
+      "timestamp": 1770119178067,
+      "web3Method": "personal_sign",
+      "web3ProviderInfo": {
+        "name": "Rabby Wallet"
+      }
+    },
+    {
+      "id": "step-8",
+      "type": "click",
+      "timestamp": 1770119200000,
+      "selector": "text=XAUUSD",
+      "metadata": {
+        "tagName": "div",
+        "text": "XAUUSD"
+      }
+    },
+    {
+      "id": "step-9",
+      "type": "click",
+      "timestamp": 1770119201000,
+      "selector": "text=BTCUSD",
+      "metadata": {
+        "tagName": "div",
+        "text": "BTCUSD"
+      }
+    },
+    {
+      "id": "step-10",
+      "type": "input",
+      "timestamp": 1770119210000,
+      "selector": "[data-testid=\"leverage-input\"]",
+      "value": "120",
+      "metadata": {
+        "dataTestId": "leverage-input",
+        "tagName": "input"
+      }
+    },
+    {
+      "id": "step-11",
+      "type": "input",
+      "timestamp": 1770119215000,
+      "selector": "[data-testid=\"collateral-input\"]",
+      "value": "1",
+      "metadata": {
+        "dataTestId": "collateral-input",
+        "tagName": "input"
+      }
+    },
+    {
+      "id": "step-12",
+      "type": "click",
+      "timestamp": 1770119220000,
+      "selector": "[data-testid=\"place-order-button\"]",
+      "metadata": {
+        "dataTestId": "place-order-button",
+        "tagName": "button",
+        "text": "Place Order"
+      }
+    },
+    {
+      "id": "step-13",
+      "type": "click",
+      "timestamp": 1770119225000,
+      "selector": "[data-testid=\"confirm-trade-button\"]",
+      "metadata": {
+        "dataTestId": "confirm-trade-button",
+        "tagName": "button",
+        "text": "Confirm"
+      }
+    },
+    {
+      "id": "step-14",
+      "type": "web3",
+      "timestamp": 1770119225100,
+      "web3Method": "eth_sendTransaction",
+      "web3ProviderInfo": {
+        "name": "Rabby Wallet"
+      }
+    }
+  ]
+}

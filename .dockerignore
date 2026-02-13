@@ -1,0 +1,69 @@
+# Dependencies - will be installed fresh in container
+node_modules
+**/node_modules
+
+# Build outputs
+dist
+**/dist
+.next
+**/.next
+out
+**/out
+
+# Development files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Environment files (secrets)
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test results (can be large)
+test-results
+**/test-results
+playwright-report
+**/playwright-report
+coverage
+**/coverage
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Documentation
+*.md
+docs
+
+# Synpress cache (large, will be built in container)
+synpress-test/.cache
+synpress-test/.cache-synpress
+synpress-test/cache-*
+
+# Extension build artifacts
+extension/dist
+
+# Misc
+*.tgz
+*.tar.gz
+.turbo

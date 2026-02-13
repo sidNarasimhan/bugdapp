@@ -1,0 +1,371 @@
+/* CSS Variables - B&W theme */
+:root {
+  --color-bg: #000000;
+  --color-surface: #18181b;
+  --color-border: #27272a;
+  --color-text: #e4e4e7;
+  --color-text-secondary: #a1a1aa;
+  --color-text-muted: #71717a;
+  --color-accent: #ffffff;
+  --color-success: #22c55e;
+  --color-danger: #ef4444;
+  --color-idle: #52525b;
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  --border-radius: 8px;
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-family);
+  font-size: 14px;
+  color: var(--color-text);
+  background-color: var(--color-bg);
+}
+
+.container {
+  width: 320px;
+  padding: var(--spacing-md);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: var(--spacing-md);
+}
+
+.header img {
+  flex-shrink: 0;
+}
+
+h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--color-accent);
+  letter-spacing: -0.01em;
+}
+
+/* Status Section */
+#status-section {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background-color: var(--color-surface);
+  border-radius: var(--border-radius);
+  border: 1px solid var(--color-border);
+}
+
+.status {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status.idle {
+  background-color: var(--color-idle);
+}
+
+.status.recording {
+  background-color: var(--color-success);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+#status-text {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+/* Buttons */
+.btn {
+  width: 100%;
+  height: 40px;
+  border: none;
+  border-radius: var(--border-radius);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background-color: var(--color-accent);
+  color: #000000;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: #e4e4e7;
+}
+
+.btn-danger {
+  background-color: var(--color-danger);
+  color: white;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background-color: #dc2626;
+}
+
+.btn-secondary {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #27272a;
+}
+
+/* Upload button */
+.btn-upload {
+  width: 100%;
+  height: 40px;
+  border: none;
+  border-radius: var(--border-radius);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background-color: var(--color-accent);
+  color: #000000;
+  margin-top: 8px;
+}
+
+.btn-upload:hover:not(:disabled) {
+  background-color: #e4e4e7;
+}
+
+.btn-upload:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Recording Info */
+#recording-info {
+  margin-top: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background-color: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  border-radius: var(--border-radius);
+  font-size: 12px;
+}
+
+#recording-info p {
+  margin-bottom: var(--spacing-xs);
+  color: var(--color-text-secondary);
+}
+
+#recording-info p:last-child {
+  margin-bottom: 0;
+}
+
+#current-url {
+  color: var(--color-text);
+  word-break: break-all;
+}
+
+#step-count {
+  font-weight: 600;
+  color: var(--color-success);
+}
+
+/* Error Message */
+.error {
+  margin-top: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background-color: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: var(--border-radius);
+  color: var(--color-danger);
+  font-size: 12px;
+}
+
+/* Step List */
+.step-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  margin-bottom: 12px;
+  background-color: var(--color-surface);
+}
+
+.step-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 12px;
+}
+
+.step-item:last-child {
+  border-bottom: none;
+}
+
+.step-icon {
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+.step-details {
+  flex: 1;
+  overflow: hidden;
+}
+
+.step-type {
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.step-info {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.step-delete {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 4px;
+  font-size: 16px;
+}
+
+.step-delete:hover {
+  color: var(--color-danger);
+}
+
+/* Save Section */
+.save-section {
+  margin-top: 12px;
+}
+
+.save-section label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.save-section input,
+.save-section select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  font-size: 14px;
+  margin-bottom: 12px;
+  box-sizing: border-box;
+  background-color: var(--color-surface);
+  color: var(--color-text);
+}
+
+.save-section input:focus,
+.save-section select:focus {
+  outline: none;
+  border-color: #52525b;
+}
+
+.save-section input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.save-section select option {
+  background-color: var(--color-surface);
+  color: var(--color-text);
+}
+
+.button-row {
+  display: flex;
+  gap: 8px;
+}
+
+.button-row .btn {
+  flex: 1;
+}
+
+/* Save Status */
+#save-status {
+  margin-top: 12px;
+  padding: 8px;
+  border-radius: var(--border-radius);
+  font-size: 12px;
+  text-align: center;
+}
+
+#save-status.success {
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  color: var(--color-success);
+}
+
+#save-status.error {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: var(--color-danger);
+}
+
+/* Preview section heading */
+#preview-section h2 {
+  font-size: 14px;
+  margin: 0 0 12px 0;
+  color: var(--color-text);
+}
+
+/* Empty state */
+.empty-state {
+  padding: 20px;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+/* Utility Classes */
+.hidden {
+  display: none;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 2px;
+}

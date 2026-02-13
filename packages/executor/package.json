@@ -1,0 +1,51 @@
+{
+  "name": "@web3-test/executor",
+  "version": "1.0.0",
+  "description": "Test execution engine for Web3 dApp testing with Playwright and MetaMask",
+  "type": "module",
+  "main": "dist/runner.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/runner.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "worker": "node dist/worker.js",
+    "lint": "eslint src --ext .ts",
+    "clean": "rimraf dist",
+    "docker:build": "docker build -t web3-test-executor .",
+    "docker:run": "docker run --rm -it web3-test-executor"
+  },
+  "keywords": [
+    "playwright",
+    "dappwright",
+    "metamask",
+    "web3",
+    "testing",
+    "execution"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@aws-sdk/client-s3": "^3.658.0",
+    "@playwright/test": "^1.51.0",
+    "@prisma/client": "^5.22.0",
+    "@tenkeylabs/dappwright": "^2.13.3",
+    "bullmq": "^5.25.5",
+    "dotenv": "^16.4.5",
+    "ioredis": "^5.4.1",
+    "nanoid": "^5.0.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "prisma": "^5.22.0",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

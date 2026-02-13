@@ -1,0 +1,110 @@
+{
+  "patterns": [
+    {
+      "name": "RainbowKit",
+      "detection": {
+        "selectors": ["[data-testid^='rk-']", "[class*='rk-']", "button[data-testid='rk-connect-button']"],
+        "text": ["Connect Wallet"],
+        "attributes": ["data-testid=rk-connect-button", "data-testid=rk-wallet-option-metaMask"]
+      },
+      "connectionFlow": [
+        "Click connect button: page.getByTestId('rk-connect-button').click()",
+        "Wait for wallet modal: page.waitForTimeout(1000)",
+        "Click MetaMask option: page.getByTestId('rk-wallet-option-metaMask').or(page.getByText('MetaMask')).first().click()",
+        "Approve connection: wallet.approve()",
+        "Verify: page.evaluate(() => window.ethereum?.selectedAddress)"
+      ],
+      "obstacles": [
+        "Terms of service checkbox may appear before connect button",
+        "Cookie consent banner may overlay the page"
+      ]
+    },
+    {
+      "name": "Web3Modal (WalletConnect)",
+      "detection": {
+        "selectors": ["w3m-button", "w3m-connect-button", "[class*='w3m-']", "[data-testid*='w3m']"],
+        "text": ["Connect Wallet", "WalletConnect"]
+      },
+      "connectionFlow": [
+        "Click connect button: page.locator('w3m-button').or(page.getByText('Connect Wallet')).first().click()",
+        "Wait for modal: page.waitForTimeout(1500)",
+        "Look for 'All wallets' or 'MetaMask' in the modal",
+        "Click MetaMask: page.getByText('MetaMask').click()",
+        "Approve connection: wallet.approve()",
+        "Verify: page.evaluate(() => window.ethereum?.selectedAddress)"
+      ],
+      "obstacles": [
+        "Web3Modal may show a QR code by default - need to find 'Browser Wallet' or 'MetaMask' option",
+        "May need to click 'All Wallets' to see MetaMask option"
+      ]
+    },
+    {
+      "name": "Privy",
+      "detection": {
+        "selectors": ["#privy-modal-content", "#privy-dialog", "[data-testid='login-button']", "[class*='privy']"],
+        "text": ["Login", "Continue with a wallet", "Sign In with Ethereum"],
+        "attributes": ["data-testid=login-button", "data-testid=tnc-sign-button"]
+      },
+      "connectionFlow": [
+        "Click login button: page.getByTestId('login-button').click()",
+        "Wait for Privy modal: page.waitForTimeout(2000)",
+        "Click 'Continue with a wallet': page.getByRole('button', { name: 'Continue with a wallet' }).click()",
+        "Wait for wallet selection: page.waitForTimeout(2000)",
+        "Click MetaMask: page.getByRole('button', { name: 'MetaMask' }).click()",
+        "Approve connection: wallet.approve()",
+        "Wait for dApp to process: page.waitForTimeout(3000)",
+        "SIWE Terms: Click dApp 'Sign' button to trigger SIWE popup, then wallet.sign()"
+      ],
+      "obstacles": [
+        "After wallet.approve(), Privy shows a 'Welcome' dialog with Terms of Service",
+        "User must click 'Sign' on the dApp FIRST to trigger the MetaMask SIWE popup",
+        "SIWE (Sign-In With Ethereum) is a SEPARATE step from wallet connection",
+        "The 'Sign' button may have data-testid='tnc-sign-button' on some dApps"
+      ]
+    },
+    {
+      "name": "Custom Connect",
+      "detection": {
+        "selectors": [],
+        "text": ["Connect", "Connect Wallet", "Launch App", "Enter App", "Sign In"]
+      },
+      "connectionFlow": [
+        "Find the connect button using text matching",
+        "May need to navigate through a wallet selection modal",
+        "Look for MetaMask icon/text in the selection",
+        "Click MetaMask, then wallet.approve()",
+        "Some dApps auto-detect the wallet and don't show selection"
+      ],
+      "obstacles": [
+        "Welcome/landing pages may require clicking 'Launch App' first",
+        "Terms of service acceptance",
+        "Region restrictions",
+        "Multiple connect button variations on the same page"
+      ]
+    }
+  ],
+  "commonObstacles": {
+    "cookieBanner": {
+      "selectors": ["[class*='cookie']", "[id*='cookie']", "[data-testid*='cookie']", "button:has-text('Accept')"],
+      "strategy": "Try to dismiss by clicking 'Accept' or 'Accept All' button"
+    },
+    "termsAcceptance": {
+      "selectors": ["input[type='checkbox']", "[class*='terms']", "[data-testid*='terms']"],
+      "strategy": "Check the checkbox and/or click 'I Agree' button"
+    },
+    "welcomeModal": {
+      "selectors": ["[class*='modal']", "[role='dialog']"],
+      "strategy": "Look for close/dismiss/continue button within the modal"
+    }
+  },
+  "walletMapping": {
+    "Rabby Wallet": {
+      "selectMetaMask": "When Rabby is recorded, click 'MetaMask' instead in wallet selection modal",
+      "commonSelectors": ["button:has-text('MetaMask')", "[data-testid*='metamask']", "img[alt*='MetaMask']"]
+    },
+    "Coinbase Wallet": {
+      "selectMetaMask": "When Coinbase Wallet is recorded, click 'MetaMask' instead",
+      "commonSelectors": ["button:has-text('MetaMask')", "[data-testid*='metamask']"]
+    }
+  }
+}

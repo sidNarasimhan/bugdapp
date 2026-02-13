@@ -1,0 +1,255 @@
+import type { AnalysisResult, GenerationOptions, TranslationResult, FailureContext } from './types.js';
+import { ClaudeClient, createClaudeClient } from './claude-client.js';
+import { createPromptBuilder } from './prompt-builder.js';
+import { validateTypeScript } from './validator.js';
+
+export interface CodeGeneratorOptions extends Partial<GenerationOptions> {
+  apiKey?: string;
+  model?: string;
+  maxTokens?: number;
+  validateOutput?: boolean;
+}
+
+/**
+ * Generates Playwright/dappwright code from analyzed recordings using Claude
+ */
+export class CodeGenerator {
+  private client: ClaudeClient;
+  private options: CodeGeneratorOptions;
+
+  constructor(options: CodeGeneratorOptions = {}) {
+    this.client = createClaudeClient({
+      apiKey: options.apiKey,
+      model: options.model,
+      maxTokens: options.maxTokens,
+    });
+    this.options = options;
+  }
+
+  /**
+   * Generate a complete test spec from an analysis result
+   */
+  async generate(analysis: AnalysisResult): Promise<TranslationResult> {
+    const promptBuilder = createPromptBuilder(analysis, this.options);
+
+    const systemPrompt = promptBuilder.buildSystemPrompt();
+    const userPrompt = promptBuilder.buildUserPrompt();
+
+    try {
+      // Check if recording steps have screenshots for vision-based generation
+      const stepScreenshots = analysis.recording.steps
+        .filter((s): s is typeof s & { screenshot: string } => 'screenshot' in s && typeof (s as Record<string, unknown>).screenshot === 'string')
+        .slice(0, 10) // Limit to 10 screenshots to manage token cost
+        .map((s) => {
+          // Strip data URL prefix if present
+          const base64 = s.screenshot.replace(/^data:image\/\w+;base64,/, '');
+          return { base64, mediaType: 'image/png' as const };
+        });
+
+      let code: string;
+      if (stepScreenshots.length > 0) {
+        const response = await this.client.generateCodeWithImages({
+          systemPrompt,
+          userPrompt,
+          images: stepScreenshots,
+          temperature: 0.2,
+        });
+        code = response.code;
+      } else {
+        const response = await this.client.generateCode({
+          systemPrompt,
+          userPrompt,
+          temperature: 0.2,
+        });
+        code = response.code;
+      }
+
+      // Validate the generated TypeScript if requested
+      if (this.options.validateOutput !== false) {
+        const validation = await validateTypeScript(code);
+
+        if (!validation.valid) {
+          return {
+            success: false,
+            code,
+            errors: validation.errors.map(
+              (e) => `Line ${e.line}: ${e.message}`
+            ),
+            warnings: validation.warnings.map(
+              (w) => `Line ${w.line}: ${w.message}`
+            ),
+            analysis,
+          };
+        }
+      }
+
+      // Post-process the code
+      code = this.postProcessCode(code, analysis);
+
+      return {
+        success: true,
+        code,
+        warnings: analysis.warnings,
+        analysis,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return {
+        success: false,
+        errors: [`Code generation failed: ${errorMessage}`],
+        analysis,
+      };
+    }
+  }
+
+  /**
+   * Post-process generated code to fix common issues
+   */
+  private postProcessCode(code: string, _analysis: AnalysisResult): string {
+    let processed = code;
+
+    // Fix wrong import paths — specs are in test/playwright/, fixture is at fixtures/wallet.fixture
+    // Correct relative path is ../../fixtures/wallet.fixture (TWO levels up)
+    processed = processed.replace(
+      /from ['"]\.\.\/fixtures\/wallet\.fixture['"]/g,
+      "from '../../fixtures/wallet.fixture'"
+    );
+
+    // Strip any accidental Synpress imports
+    processed = processed.replace(/^import .* from ['"]@synthetixio\/synpress.*['"];?\n/gm, '');
+
+    // Strip any accidental direct dappwright imports
+    processed = processed.replace(/^import .* from ['"]@tenkeylabs\/dappwright.*['"];?\n/gm, '');
+
+    // Strip any leftover Synpress setup patterns
+    processed = processed.replace(/^const test = testWithSynpress\(metaMaskFixtures\(.*\)\);?\n/gm, '');
+    processed = processed.replace(/^const \{ expect \} = test;?\n/gm, '');
+
+    // Ensure the correct dappwright fixture import is present
+    if (!processed.includes("from '../../fixtures/wallet.fixture'")) {
+      processed = `import { test, expect } from '../../fixtures/wallet.fixture'\n\n` + processed;
+    }
+
+    return processed;
+  }
+
+  /**
+   * Regenerate a spec using failure context (self-healing)
+   */
+  async regenerate(analysis: AnalysisResult, failureContext: FailureContext): Promise<TranslationResult> {
+    const promptBuilder = createPromptBuilder(analysis, this.options);
+
+    const systemPrompt = promptBuilder.buildSystemPrompt();
+    const retryPrompt = promptBuilder.buildRetryPrompt(failureContext);
+
+    try {
+      // Use vision if screenshots are available
+      const hasScreenshots = failureContext.screenshots.length > 0;
+
+      let code: string;
+      if (hasScreenshots) {
+        const response = await this.client.generateCodeWithImages({
+          systemPrompt,
+          userPrompt: retryPrompt,
+          images: failureContext.screenshots.map((s) => ({
+            base64: s.base64,
+            mediaType: s.mediaType,
+          })),
+          temperature: 0.3, // Slightly higher temp for creative fixes
+        });
+        code = response.code;
+      } else {
+        const response = await this.client.generateCode({
+          systemPrompt,
+          userPrompt: retryPrompt,
+          temperature: 0.3,
+        });
+        code = response.code;
+      }
+
+      // Post-process the code
+      code = this.postProcessCode(code, analysis);
+
+      // Validate
+      if (this.options.validateOutput !== false) {
+        const validation = await validateTypeScript(code);
+        if (!validation.valid) {
+          return {
+            success: false,
+            code,
+            errors: validation.errors.map((e) => `Line ${e.line}: ${e.message}`),
+            warnings: validation.warnings.map((w) => `Line ${w.line}: ${w.message}`),
+            analysis,
+          };
+        }
+      }
+
+      return {
+        success: true,
+        code,
+        warnings: [],
+        analysis,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return {
+        success: false,
+        errors: [`Regeneration failed: ${errorMessage}`],
+        analysis,
+      };
+    }
+  }
+
+  /**
+   * Generate code for a specific section of the recording
+   */
+  async generateSection(
+    analysis: AnalysisResult,
+    startIndex: number,
+    endIndex: number
+  ): Promise<TranslationResult> {
+    const promptBuilder = createPromptBuilder(analysis, this.options);
+
+    const systemPrompt = promptBuilder.buildSystemPrompt();
+    const userPrompt = promptBuilder.buildSectionPrompt(startIndex, endIndex);
+
+    try {
+      const response = await this.client.generateCode({
+        systemPrompt,
+        userPrompt,
+        temperature: 0.2,
+      });
+
+      return {
+        success: true,
+        code: response.code,
+        analysis,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return {
+        success: false,
+        errors: [`Section generation failed: ${errorMessage}`],
+        analysis,
+      };
+    }
+  }
+}
+
+/**
+ * Create a code generator with the given options
+ */
+export function createCodeGenerator(options?: CodeGeneratorOptions): CodeGenerator {
+  return new CodeGenerator(options);
+}
+
+/**
+ * Generate code from an analysis result (convenience function)
+ */
+export async function generateCode(
+  analysis: AnalysisResult,
+  options?: CodeGeneratorOptions
+): Promise<TranslationResult> {
+  const generator = createCodeGenerator(options);
+  return generator.generate(analysis);
+}
