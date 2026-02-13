@@ -11,3 +11,7 @@ trace-debug/
 .cache-synpress/
 *.tsbuildinfo
 .vscode/
+
+# Generated test specs (created at runtime by translator)
+packages/translator/test-*.spec.ts
+packages/translator/avantis-*.spec.ts
