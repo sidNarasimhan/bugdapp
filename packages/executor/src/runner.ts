@@ -1,8 +1,9 @@
-import { spawn, execSync } from 'child_process';
-import { writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, copyFileSync, readFileSync } from 'fs';
+import { spawn, execSync, type ChildProcess } from 'child_process';
+import { writeFileSync, mkdirSync, existsSync, rmSync, readdirSync, copyFileSync, readFileSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { randomBytes } from 'crypto';
+import AdmZip from 'adm-zip';
 
 export interface RunnerOptions {
   headless?: boolean;
@@ -61,6 +62,7 @@ export interface SuiteRunResult {
 export class TestRunner {
   private options: RunnerOptions;
   private testDir: string;
+  private currentProcess: ChildProcess | null = null;
 
   constructor(options: RunnerOptions = {}) {
     this.options = {
@@ -76,6 +78,27 @@ export class TestRunner {
       || process.env.DAPPWRIGHT_TEST_DIR
       || process.env.SYNPRESS_TEST_DIR
       || join(process.cwd(), '..', '..', 'dappwright-test');
+  }
+
+  /**
+   * Abort the currently running test by killing the child process.
+   * Returns true if a process was killed.
+   */
+  abort(): boolean {
+    if (this.currentProcess && !this.currentProcess.killed) {
+      console.log('[Runner] Aborting test — killing child process');
+      // Kill the entire process group (shell: true creates a group)
+      try {
+        // On Linux, kill the process group
+        process.kill(-this.currentProcess.pid!, 'SIGKILL');
+      } catch {
+        // Fallback: kill just the process
+        this.currentProcess.kill('SIGKILL');
+      }
+      this.currentProcess = null;
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -144,8 +167,11 @@ export class TestRunner {
       }
     }
 
-    // Collect artifacts from dappwright-test test-results
+    // Bundle any loose screencast frames into screencast.zip
     const testResultsDir = join(this.testDir, 'test-results');
+    this.bundleScreencastFrames(artifactsDir, testResultsDir);
+
+    // Collect artifacts from dappwright-test test-results
     const artifacts = this.collectArtifacts(artifactsDir, testResultsDir);
 
     return {
@@ -194,8 +220,10 @@ export class TestRunner {
         shell: true,
         timeout: this.options.timeout,
         env,
+        detached: true, // Create process group for clean kill
       });
 
+      this.currentProcess = proc;
       let output = '';
 
       proc.stdout.on('data', (data: Buffer) => {
@@ -213,6 +241,7 @@ export class TestRunner {
       });
 
       proc.on('close', (code: number | null) => {
+        this.currentProcess = null;
         resolve({
           exitCode: code ?? 1,
           output,
@@ -220,6 +249,7 @@ export class TestRunner {
       });
 
       proc.on('error', (err: Error) => {
+        this.currentProcess = null;
         output += `\nProcess error: ${err.message}`;
         resolve({
           exitCode: 1,
@@ -326,6 +356,7 @@ export class TestRunner {
     }
 
     const testResultsDir = join(this.testDir, 'test-results');
+    this.bundleScreencastFrames(artifactsDir, testResultsDir);
     const artifacts = this.collectArtifacts(artifactsDir, testResultsDir);
 
     return {
@@ -428,8 +459,10 @@ export class TestRunner {
         shell: true,
         timeout: this.options.timeout,
         env,
+        detached: true,
       });
 
+      this.currentProcess = proc;
       let output = '';
 
       proc.stdout.on('data', (data: Buffer) => {
@@ -447,10 +480,12 @@ export class TestRunner {
       });
 
       proc.on('close', (code: number | null) => {
+        this.currentProcess = null;
         resolve({ exitCode: code ?? 1, output });
       });
 
       proc.on('error', (err: Error) => {
+        this.currentProcess = null;
         output += `\nProcess error: ${err.message}`;
         resolve({ exitCode: 1, output });
       });
@@ -681,6 +716,50 @@ export default defineConfig({
   }
 
   /**
+   * Bundle loose screencast frames (from wallet fixture) into screencast.zip.
+   * The fixture saves individual JPEGs + manifest; we bundle them for clean upload.
+   */
+  private bundleScreencastFrames(artifactsDir: string, testResultsDir?: string): void {
+    const dirs = [artifactsDir];
+    if (testResultsDir) dirs.push(testResultsDir);
+
+    for (const baseDir of dirs) {
+      if (!existsSync(baseDir)) continue;
+
+      // Walk to find _screencast_frames directories
+      const allDirs = this.walkDir(baseDir).filter(f => f.endsWith('screencast-manifest.json'));
+
+      for (const manifestPath of allDirs) {
+        try {
+          const manifestDir = dirname(manifestPath);
+          const framesDir = join(manifestDir, '_screencast_frames');
+          if (!existsSync(framesDir)) continue;
+
+          const manifestData = readFileSync(manifestPath, 'utf-8');
+          const frameFiles = readdirSync(framesDir).filter(f => f.endsWith('.jpg')).sort();
+          if (frameFiles.length === 0) continue;
+
+          const zip = new AdmZip();
+          zip.addFile('manifest.json', Buffer.from(manifestData));
+          for (const file of frameFiles) {
+            zip.addLocalFile(join(framesDir, file), 'frames/');
+          }
+
+          const zipPath = join(artifactsDir, 'screencast.zip');
+          zip.writeZip(zipPath);
+          console.log(`[Runner] Bundled ${frameFiles.length} screencast frames into screencast.zip`);
+
+          // Clean up individual frames and manifest
+          rmSync(framesDir, { recursive: true, force: true });
+          rmSync(manifestPath, { force: true });
+        } catch (err) {
+          console.warn(`[Runner] Failed to bundle screencast frames: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+  }
+
+  /**
    * Collect artifacts from the output directory (and optionally test results)
    */
   private collectArtifacts(
@@ -724,7 +803,7 @@ export default defineConfig({
         type = 'screenshot';
       } else if (ext === 'webm' || ext === 'mp4') {
         type = 'video';
-      } else if (ext === 'zip' && file.includes('trace')) {
+      } else if (ext === 'zip' && (file.includes('trace') || file.includes('screencast'))) {
         type = 'trace';
       } else if (ext === 'txt' || ext === 'log' || ext === 'json') {
         type = 'log';
@@ -760,6 +839,8 @@ export default defineConfig({
       const fullPath = join(dir, entry.name);
 
       if (entry.isDirectory()) {
+        // Skip temp screencast frame dirs (already bundled into screencast.zip)
+        if (entry.name === '_screencast_frames') continue;
         files.push(...this.walkDir(fullPath));
       } else {
         files.push(fullPath);

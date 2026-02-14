@@ -2,7 +2,28 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../db.js';
 import { executionService } from '../services/execution.js';
 import { selfHealService } from '../services/self-heal.js';
-import { getReplayManifest, getFrameFromZip } from '../services/trace-parser.js';
+import { getReplayManifest, getFrameFromZip, getScreencastManifest, getScreencastFrame } from '../services/trace-parser.js';
+
+/** Convert agent tool + input to a human-readable label */
+function agentActionLabel(tool: string, input: Record<string, unknown>, elementDesc?: string): string {
+  if (tool === 'browser_click') return elementDesc || (input.description as string) || 'Click element';
+  if (tool === 'browser_type') {
+    const target = elementDesc || `field`;
+    return `Type into ${target}`;
+  }
+  if (tool === 'browser_navigate') return `Navigate to ${input.url || 'page'}`;
+  if (tool === 'browser_scroll') return `Scroll ${input.direction || 'down'}`;
+  if (tool === 'browser_press_key') return `Press ${input.key || 'key'}`;
+  if (tool === 'browser_wait') return input.text ? `Wait for "${input.text}"` : 'Wait';
+  if (tool === 'wallet_approve') return 'Approve wallet connection';
+  if (tool === 'wallet_switch_network') return `Switch to ${input.network || 'network'}`;
+  if (tool === 'wallet_sign') return 'Sign message';
+  if (tool === 'wallet_confirm_transaction') return 'Confirm transaction';
+  if (tool === 'assert_wallet_connected') return 'Verify wallet connected';
+  if (tool === 'step_complete') return String(input.summary || 'Step complete');
+  if (tool === 'test_complete') return String(input.summary || 'Test complete');
+  return tool.replace(/_/g, ' ');
+}
 
 // Request/Response types
 interface CreateRunBody {
@@ -640,6 +661,261 @@ export async function runsRoutes(fastify: FastifyInstance) {
     }
   });
 
+  // --- Frames endpoint (unified screenshot player) ---
+
+  interface FrameItem {
+    index: number;
+    url: string;
+    label: string;
+    stepIndex?: number;
+    stepDescription?: string;
+  }
+
+  fastify.get<{ Params: GetRunParams }>('/:id/frames', {
+    schema: {
+      tags: ['runs'],
+      summary: 'Get ordered frame list for the screenshot replay player',
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            runId: { type: 'string' },
+            frameCount: { type: 'number' },
+            frames: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  index: { type: 'number' },
+                  url: { type: 'string' },
+                  label: { type: 'string' },
+                  stepIndex: { type: 'number', nullable: true },
+                  stepDescription: { type: 'string', nullable: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: GetRunParams }>, reply: FastifyReply) => {
+    const { id } = request.params;
+
+    const run = await prisma.testRun.findUnique({ where: { id } });
+    if (!run) {
+      return reply.status(404).send({ error: 'Test run not found' });
+    }
+
+    const frames: FrameItem[] = [];
+
+    // Find all trace-type artifacts (trace.zip AND screencast.zip)
+    const traceArtifacts = await prisma.artifact.findMany({
+      where: { testRunId: id, type: 'TRACE' },
+    });
+    const screencastArtifact = traceArtifacts.find(a => a.name === 'screencast.zip');
+    const traceArtifact = traceArtifacts.find(a => a.name === 'trace.zip' || !a.name.includes('screencast'));
+
+    // Priority 1: High-quality screencast.zip (from CDP capture)
+    if (screencastArtifact) {
+      try {
+        const scManifest = await getScreencastManifest(id, screencastArtifact.storagePath);
+        if (scManifest && scManifest.frameCount > 0) {
+          // Get trace actions for labels (if trace.zip also exists)
+          let traceActions: { startTime: number; label: string }[] = [];
+          if (traceArtifact) {
+            try {
+              const traceManifest = await getReplayManifest(id, traceArtifact.storagePath);
+              traceActions = traceManifest.actions;
+            } catch { /* labels will be empty, non-fatal */ }
+          }
+
+          // Build agent labels (for agent mode)
+          const agentData = (run as any).agentData as {
+            steps: Array<{
+              stepId: string;
+              description: string;
+              actions: Array<{ tool: string; input: Record<string, unknown>; elementDesc?: string }>;
+            }>;
+          } | null;
+
+          const agentLabels: string[] = [];
+          const agentStepInfo: Array<{ stepIndex: number; stepDescription: string }> = [];
+          if (agentData?.steps) {
+            for (let si = 0; si < agentData.steps.length; si++) {
+              const step = agentData.steps[si];
+              for (const action of step.actions) {
+                agentLabels.push(agentActionLabel(action.tool, action.input, action.elementDesc));
+                agentStepInfo.push({ stepIndex: si, stepDescription: step.description });
+              }
+            }
+          }
+
+          for (let i = 0; i < scManifest.frames.length; i++) {
+            const frame = scManifest.frames[i];
+            const ts = frame.timestamp;
+
+            let label = '';
+            let stepIndex: number | undefined;
+            let stepDescription: string | undefined;
+
+            // Match trace action by timestamp
+            for (let j = traceActions.length - 1; j >= 0; j--) {
+              if (traceActions[j].startTime <= ts) {
+                label = traceActions[j].label;
+                break;
+              }
+            }
+
+            // Overlay agent labels
+            if (agentLabels.length > 0) {
+              let traceActionIdx = -1;
+              for (let j = traceActions.length - 1; j >= 0; j--) {
+                if (traceActions[j].startTime <= ts) { traceActionIdx = j; break; }
+              }
+              if (traceActionIdx >= 0 && traceActionIdx < agentLabels.length) {
+                if (agentLabels[traceActionIdx]) label = agentLabels[traceActionIdx];
+                stepIndex = agentStepInfo[traceActionIdx]?.stepIndex;
+                stepDescription = agentStepInfo[traceActionIdx]?.stepDescription;
+              }
+            }
+
+            frames.push({
+              index: i,
+              url: `/api/runs/${id}/screencast/frames/${encodeURIComponent(frame.filename)}`,
+              label: label || '',
+              stepIndex,
+              stepDescription,
+            });
+          }
+
+          return { runId: id, frameCount: frames.length, frames };
+        }
+      } catch (error) {
+        fastify.log.warn({ err: error, runId: id }, 'Failed to parse screencast.zip, falling back to trace');
+      }
+    }
+
+    // Priority 2: Trace.zip frames (lower quality but dense)
+    if (traceArtifact) {
+      try {
+        const manifest = await getReplayManifest(id, traceArtifact.storagePath);
+
+        if (manifest.frameCount > 0) {
+          const actions = manifest.actions;
+
+          const agentData = (run as any).agentData as {
+            steps: Array<{
+              stepId: string;
+              description: string;
+              actions: Array<{ tool: string; input: Record<string, unknown>; elementDesc?: string }>;
+            }>;
+          } | null;
+
+          const agentLabels: string[] = [];
+          const agentStepInfo: Array<{ stepIndex: number; stepDescription: string }> = [];
+          if (agentData?.steps) {
+            for (let si = 0; si < agentData.steps.length; si++) {
+              const step = agentData.steps[si];
+              for (const action of step.actions) {
+                agentLabels.push(agentActionLabel(action.tool, action.input, action.elementDesc));
+                agentStepInfo.push({ stepIndex: si, stepDescription: step.description });
+              }
+            }
+          }
+
+          for (let i = 0; i < manifest.frames.length; i++) {
+            const frame = manifest.frames[i];
+            const ts = frame.timestamp;
+            let label = '';
+            let stepIndex: number | undefined;
+            let stepDescription: string | undefined;
+
+            for (let j = actions.length - 1; j >= 0; j--) {
+              if (actions[j].startTime <= ts) { label = actions[j].label; break; }
+            }
+
+            if (agentLabels.length > 0) {
+              let traceActionIdx = -1;
+              for (let j = actions.length - 1; j >= 0; j--) {
+                if (actions[j].startTime <= ts) { traceActionIdx = j; break; }
+              }
+              if (traceActionIdx >= 0 && traceActionIdx < agentLabels.length) {
+                if (agentLabels[traceActionIdx]) label = agentLabels[traceActionIdx];
+                stepIndex = agentStepInfo[traceActionIdx]?.stepIndex;
+                stepDescription = agentStepInfo[traceActionIdx]?.stepDescription;
+              }
+            }
+
+            frames.push({
+              index: i,
+              url: `/api/runs/${id}/replay/frames/${frame.sha1}`,
+              label: label || '',
+              stepIndex,
+              stepDescription,
+            });
+          }
+
+          return { runId: id, frameCount: frames.length, frames };
+        }
+      } catch (error) {
+        fastify.log.warn({ err: error, runId: id }, 'Failed to get trace frames, falling back to screenshots');
+      }
+    }
+
+    // Fallback: agent mode screenshots (sparse but still useful)
+    const agentData = (run as any).agentData as {
+      steps: Array<{
+        stepId: string;
+        description: string;
+        actions: Array<{
+          tool: string;
+          input: Record<string, unknown>;
+          elementDesc?: string;
+          screenshotBefore?: string;
+          screenshotAfter?: string;
+        }>;
+      }>;
+    } | null;
+
+    if (agentData?.steps) {
+      let idx = 0;
+      for (let si = 0; si < agentData.steps.length; si++) {
+        const step = agentData.steps[si];
+        for (const action of step.actions) {
+          if (action.screenshotBefore) {
+            frames.push({
+              index: idx++,
+              url: `/api/artifacts/runs/${id}/screenshot/${encodeURIComponent(action.screenshotBefore)}`,
+              label: agentActionLabel(action.tool, action.input, action.elementDesc) + ' (before)',
+              stepIndex: si,
+              stepDescription: step.description,
+            });
+          }
+          if (action.screenshotAfter) {
+            frames.push({
+              index: idx++,
+              url: `/api/artifacts/runs/${id}/screenshot/${encodeURIComponent(action.screenshotAfter)}`,
+              label: agentActionLabel(action.tool, action.input, action.elementDesc) + ' (after)',
+              stepIndex: si,
+              stepDescription: step.description,
+            });
+          }
+        }
+      }
+    }
+
+    if (frames.length === 0) {
+      return reply.status(404).send({ error: 'No frames available for this run' });
+    }
+
+    return { runId: id, frameCount: frames.length, frames };
+  });
+
   // --- Replay endpoints ---
 
   // Get replay manifest for a run (parsed from trace.zip)
@@ -717,6 +993,48 @@ export async function runsRoutes(fastify: FastifyInstance) {
       return reply.send(frameBuffer);
     } catch (error) {
       fastify.log.error({ err: error }, 'Failed to extract frame from trace');
+      return reply.status(500).send({ error: 'Failed to extract frame' });
+    }
+  });
+
+  // Serve individual frame from screencast.zip (high-quality CDP capture)
+  fastify.get<{ Params: GetRunParams & { filename: string } }>('/:id/screencast/frames/:filename', {
+    schema: {
+      tags: ['runs'],
+      summary: 'Get a high-quality screencast frame from screencast.zip',
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          filename: { type: 'string' },
+        },
+        required: ['id', 'filename'],
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: GetRunParams & { filename: string } }>, reply: FastifyReply) => {
+    const { id, filename } = request.params;
+
+    const screencastArtifact = await prisma.artifact.findFirst({
+      where: { testRunId: id, type: 'TRACE', name: 'screencast.zip' },
+    });
+
+    if (!screencastArtifact) {
+      return reply.status(404).send({ error: 'No screencast artifact found' });
+    }
+
+    try {
+      const frameBuffer = await getScreencastFrame(id, screencastArtifact.storagePath, filename);
+
+      if (!frameBuffer) {
+        return reply.status(404).send({ error: 'Frame not found in screencast' });
+      }
+
+      reply.header('Content-Type', 'image/jpeg');
+      reply.header('Cache-Control', 'public, max-age=86400, immutable');
+      reply.header('Content-Length', frameBuffer.length);
+      return reply.send(frameBuffer);
+    } catch (error) {
+      fastify.log.error({ err: error }, 'Failed to extract screencast frame');
       return reply.status(500).send({ error: 'Failed to extract frame' });
     }
   });

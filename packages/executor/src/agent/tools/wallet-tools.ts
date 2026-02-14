@@ -91,6 +91,37 @@ function findMetaMaskPopup(ctx: AgentContext): Page | undefined {
 }
 
 /**
+ * Get MetaMask extension ID from context pages.
+ */
+function getMetaMaskExtensionId(ctx: AgentContext): string | null {
+  const mmPage = ctx.context.pages().find(
+    (p) => { try { return p.url().startsWith('chrome-extension://') && !p.url().includes('notification'); } catch { return false; } }
+  );
+  if (!mmPage) return null;
+  try { return new URL(mmPage.url()).hostname; } catch { return null; }
+}
+
+/**
+ * Manually open MetaMask notification.html.
+ * MetaMask MV3 sometimes queues requests without opening a popup window.
+ * This forces the notification page open so we can interact with it.
+ */
+async function openNotificationManually(ctx: AgentContext): Promise<Page | null> {
+  const extId = getMetaMaskExtensionId(ctx);
+  if (!extId) {
+    console.log('[WalletTools] openNotificationManually: Could not find MetaMask extension ID');
+    return null;
+  }
+  const notifUrl = `chrome-extension://${extId}/notification.html`;
+  console.log(`[WalletTools] openNotificationManually: Opening ${notifUrl}`);
+  const notifPage = await ctx.context.newPage();
+  await notifPage.goto(notifUrl);
+  await notifPage.waitForLoadState('domcontentloaded').catch(() => {});
+  await notifPage.waitForTimeout(2000);
+  return notifPage;
+}
+
+/**
  * Detect what type of MetaMask popup is open.
  * MetaMask v13.17 uses distinct testids:
  *   - Connection: confirm-btn, cancel-btn, accounts-tab, permissions-tab
@@ -304,6 +335,16 @@ async function handleSignaturePopup(ctx: AgentContext): Promise<{ signed: boolea
       }
       return { signed, method: 'fallback-popup' };
     }
+    // MetaMask MV3 popup bug — manually open notification.html
+    console.log('[WalletTools] handleSignaturePopup: No popup after sign() — trying manual notification.html');
+    const manualPage = await openNotificationManually(ctx);
+    if (manualPage) {
+      const signed = await handleSiweConfirmation(manualPage);
+      if (!signed && !manualPage.isClosed()) {
+        await manualPage.close().catch(() => {});
+      }
+      return { signed, method: 'manual-notification' };
+    }
     return { signed: false, method: `failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
@@ -372,10 +413,21 @@ export async function executeWalletTool(
               if (popup) {
                 await handleConnectionPopup(popup);
               } else {
-                return {
-                  success: false,
-                  output: `wallet_approve failed: MetaMask popup not found. The dApp may not have triggered eth_requestAccounts. Make sure you clicked the correct "Connect" or "MetaMask" button on the dApp first.`,
-                };
+                // MetaMask MV3 popup bug: request is queued but popup never auto-opens.
+                // Manually open notification.html to access the pending request.
+                console.log('[WalletTools] wallet_approve: No popup after retry — trying manual notification.html');
+                const manualPage = await openNotificationManually(ctx);
+                if (manualPage) {
+                  const connected = await handleConnectionPopup(manualPage);
+                  if (!connected && !manualPage.isClosed()) {
+                    await manualPage.close().catch(() => {});
+                  }
+                } else {
+                  return {
+                    success: false,
+                    output: `wallet_approve failed: MetaMask popup not found. The dApp may not have triggered eth_requestAccounts. Make sure you clicked the correct "Connect" or "MetaMask" button on the dApp first.`,
+                  };
+                }
               }
             }
           }
@@ -435,8 +487,21 @@ export async function executeWalletTool(
                 if (!siweHandled) {
                   await dismissStalePopup(siwePopup);
                 }
+              } else {
+                // MetaMask MV3 may have queued SIWE without opening popup — try manual notification.html
+                console.log('[WalletTools] wallet_approve: No SIWE popup — trying manual notification.html');
+                const manualPage = await openNotificationManually(ctx);
+                if (manualPage) {
+                  const popupType = await detectPopupType(manualPage);
+                  if (popupType === 'signature' || popupType === 'unknown') {
+                    siweHandled = await handleSiweConfirmation(manualPage);
+                  }
+                  if (!manualPage.isClosed()) {
+                    await manualPage.close().catch(() => {});
+                  }
+                }
+                // If still no SIWE = genuinely not needed
               }
-              // No popup = no SIWE needed
             }
           }
         }

@@ -57,11 +57,35 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
+// Screencast cache (high-quality CDP capture)
+interface ScreencastManifestFile {
+  frameCount: number;
+  frames: Array<{ index: number; filename: string; timestamp: number }>;
+  startTimestamp: number;
+  endTimestamp: number;
+  width: number;
+  height: number;
+  quality: number;
+}
+
+interface ScreencastCacheEntry {
+  manifest: ScreencastManifestFile;
+  zip: AdmZip;
+  expiresAt: number;
+}
+
+const screencastCache = new Map<string, ScreencastCacheEntry>();
+
 function cleanupCache() {
   const now = Date.now();
   for (const [key, entry] of cache) {
     if (entry.expiresAt < now) {
       cache.delete(key);
+    }
+  }
+  for (const [key, entry] of screencastCache) {
+    if (entry.expiresAt < now) {
+      screencastCache.delete(key);
     }
   }
 }
@@ -310,6 +334,67 @@ function buildManifest(runId: string, events: unknown[], dappPageId: string): Re
     actions,
     baseTimestamp,
   };
+}
+
+// --- Screencast manifest (high-quality CDP capture) ---
+
+/**
+ * Parse screencast.zip (high-quality CDP screencast) and return its manifest.
+ * Returns null if the zip doesn't contain a valid manifest.
+ */
+export async function getScreencastManifest(
+  runId: string,
+  storagePath: string
+): Promise<ScreencastManifestFile | null> {
+  cleanupCache();
+
+  const cacheKey = `sc:${runId}:${storagePath}`;
+  const cached = screencastCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.manifest;
+  }
+
+  try {
+    const buffer = await downloadTraceZip(storagePath);
+    const zip = new AdmZip(buffer);
+    const manifestEntry = zip.getEntry('manifest.json');
+    if (!manifestEntry) return null;
+
+    const manifest: ScreencastManifestFile = JSON.parse(manifestEntry.getData().toString('utf-8'));
+    if (!manifest.frames || manifest.frames.length === 0) return null;
+
+    screencastCache.set(cacheKey, {
+      manifest,
+      zip,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+
+    return manifest;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract a single frame from the cached screencast.zip by filename.
+ */
+export async function getScreencastFrame(
+  runId: string,
+  storagePath: string,
+  filename: string
+): Promise<Buffer | null> {
+  const cacheKey = `sc:${runId}:${storagePath}`;
+  let cached = screencastCache.get(cacheKey);
+
+  if (!cached || cached.expiresAt < Date.now()) {
+    await getScreencastManifest(runId, storagePath);
+    cached = screencastCache.get(cacheKey);
+  }
+
+  if (!cached) return null;
+
+  const entry = cached.zip.getEntry(`frames/${filename}`);
+  return entry ? entry.getData() : null;
 }
 
 // --- Public API ---

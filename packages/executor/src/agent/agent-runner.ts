@@ -3,6 +3,7 @@ import type { BrowserContext, Page } from 'playwright-core';
 import type { Dappwright } from '@tenkeylabs/dappwright';
 import { mkdirSync, existsSync, rmSync, writeFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
+import { startScreencastCapture, type ScreencastCapture } from '../screencast-capture.js';
 import type {
   AgentRunResult,
   AgentConfig,
@@ -52,6 +53,7 @@ export interface AgentRunnerOptions {
 export class AgentRunner {
   private options: AgentRunnerOptions;
   private config: AgentConfig;
+  private browserContext: BrowserContext | null = null;
 
   constructor(options: AgentRunnerOptions) {
     this.options = options;
@@ -70,6 +72,18 @@ export class AgentRunner {
     // Override model from env if set
     if (process.env.AGENT_MODEL) {
       this.config.model = process.env.AGENT_MODEL;
+    }
+  }
+
+  /**
+   * Abort the running agent by closing the browser context.
+   * This will cause the run() method to throw.
+   */
+  abort(): void {
+    if (this.browserContext) {
+      console.log('[AgentRunner] Aborting — closing browser context');
+      this.browserContext.close().catch(() => {});
+      this.browserContext = null;
     }
   }
 
@@ -103,6 +117,7 @@ export class AgentRunner {
     let wallet: Dappwright | undefined;
     let page: Page | undefined;
     let context: BrowserContext | undefined;
+    let screencast: ScreencastCapture | null = null;
 
     try {
       // 1. Bootstrap dappwright (MetaMask + Chromium)
@@ -145,6 +160,7 @@ export class AgentRunner {
 
       wallet = walletInstance!;
       context = browserContext!;
+      this.browserContext = context; // Store for abort()
 
       // Get a fresh wallet reference and the dApp page
       wallet = await getWallet('metamask', context);
@@ -152,6 +168,13 @@ export class AgentRunner {
 
       // Start trace capture (screencast frames + actions for replay player)
       await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
+
+      // Start high-quality screencast capture (80% JPEG at 1280x720 vs trace's ~50% at 800x450)
+      try {
+        screencast = await startScreencastCapture(page, this.options.artifactsDir);
+      } catch {
+        console.warn('[AgentRunner] Could not start screencast capture');
+      }
 
       console.log('[AgentRunner] dappwright bootstrapped successfully');
 
@@ -196,7 +219,19 @@ export class AgentRunner {
         this.options.dappContext,
       );
 
-      // 5. Stop tracing and save trace.zip
+      // 5a. Stop screencast and bundle into screencast.zip
+      if (screencast?.active) {
+        try {
+          const screencastPath = await screencast.stop();
+          if (screencastPath) {
+            artifacts.push({ type: 'trace', name: 'screencast.zip', path: screencastPath });
+          }
+        } catch (scErr) {
+          console.warn(`[AgentRunner] Failed to save screencast: ${scErr instanceof Error ? scErr.message : String(scErr)}`);
+        }
+      }
+
+      // 5b. Stop tracing and save trace.zip
       try {
         const tracePath = join(this.options.artifactsDir, 'trace.zip');
         await context.tracing.stop({ path: tracePath });
@@ -246,6 +281,16 @@ export class AgentRunner {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[AgentRunner] Fatal error: ${message}`);
+
+      // Try to stop screencast and save partial capture
+      if (screencast?.active) {
+        try {
+          const screencastPath = await screencast.stop();
+          if (screencastPath) {
+            artifacts.push({ type: 'trace', name: 'screencast.zip', path: screencastPath });
+          }
+        } catch { /* non-fatal */ }
+      }
 
       // Try to stop tracing and save partial trace
       if (context) {
@@ -304,6 +349,8 @@ export class AgentRunner {
       const filePath = join(this.options.artifactsDir, file);
       const stat = statSync(filePath);
       if (!stat.isFile()) continue;
+      // Skip files already handled as primary artifacts
+      if (file === 'screencast.zip' || file === 'trace.zip') continue;
 
       if (file.endsWith('.png') || file.endsWith('.jpg') || file.endsWith('.jpeg')) {
         artifacts.push({

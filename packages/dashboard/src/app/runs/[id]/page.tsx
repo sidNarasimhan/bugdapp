@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'next/navigation';
-import { api, type TestRun, type Artifact } from '@/lib/api';
+import { api, type TestRun, type Artifact, type AgentRunData } from '@/lib/api';
 import { formatDate, formatDuration } from '@/lib/utils';
 import { useEffect, useState } from 'react';
 import {
@@ -18,10 +18,12 @@ import {
   Play,
   ExternalLink,
   Ban,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import Link from 'next/link';
 import { AgentReplayTimeline } from '@/components/agent-replay-timeline';
-import { TestReplayPlayer } from '@/components/test-replay-player';
+import { ScreenshotPlayer } from '@/components/screenshot-player';
 
 export default function RunDetailPage() {
   const params = useParams();
@@ -133,24 +135,21 @@ export default function RunDetailPage() {
         </div>
       )}
 
-      {/* Test Replay Player (any run with trace artifact) */}
-      {(currentRun.status === 'PASSED' || currentRun.status === 'FAILED') &&
-        artifacts.some((a) => a.type === 'TRACE') && (
+      {/* Screenshot Replay Player (unified for both SPEC and AGENT modes) */}
+      {(currentRun.status === 'PASSED' || currentRun.status === 'FAILED') && (
         <div className="mb-6">
           <h2 className="text-lg font-medium text-white mb-3">Test Replay</h2>
-          <TestReplayPlayer runId={currentRun.id} />
+          <ScreenshotPlayer runId={currentRun.id} />
         </div>
       )}
 
-      {/* Agent Replay Timeline */}
+      {/* Agent Details (collapsible) */}
       {currentRun.executionMode === 'AGENT' && currentRun.agentData && (
-        <div className="mb-6">
-          <AgentReplayTimeline
-            agentData={currentRun.agentData}
-            runId={currentRun.id}
-            passed={currentRun.passed ?? undefined}
-          />
-        </div>
+        <AgentDetailsSection
+          agentData={currentRun.agentData}
+          runId={currentRun.id}
+          passed={currentRun.passed ?? undefined}
+        />
       )}
 
       {/* Running Animation */}
@@ -211,6 +210,41 @@ export default function RunDetailPage() {
             ))}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+function AgentDetailsSection({
+  agentData,
+  runId,
+  passed,
+}: {
+  agentData: AgentRunData;
+  runId: string;
+  passed?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="mb-6">
+      <button
+        onClick={() => setExpanded((p) => !p)}
+        className="flex items-center gap-2 text-lg font-medium text-white mb-3 hover:text-zinc-300 transition-colors"
+      >
+        {expanded ? (
+          <ChevronDown className="h-4 w-4" />
+        ) : (
+          <ChevronRight className="h-4 w-4" />
+        )}
+        Agent Details
+      </button>
+      {expanded && (
+        <AgentReplayTimeline
+          agentData={agentData}
+          runId={runId}
+          passed={passed}
+        />
       )}
     </div>
   );

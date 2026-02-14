@@ -123,6 +123,44 @@ function getMimeType(fileName: string): string {
 }
 
 /**
+ * Check if a run has been cancelled in the DB.
+ * Returns true if status is CANCELLED.
+ */
+async function isRunCancelled(runId: string): Promise<boolean> {
+  const db = await getPrisma();
+  const run = await db.testRun.findUnique({
+    where: { id: runId },
+    select: { status: true },
+  });
+  return run?.status === 'CANCELLED';
+}
+
+/**
+ * Start a cancellation polling loop. Returns a cleanup function.
+ * Calls `onCancel` when the run is detected as CANCELLED.
+ */
+function startCancelPoller(runId: string, onCancel: () => void, intervalMs = 5000): () => void {
+  let stopped = false;
+  const timer = setInterval(async () => {
+    if (stopped) return;
+    try {
+      if (await isRunCancelled(runId)) {
+        console.log(`[Worker] Run ${runId} cancelled — aborting`);
+        stopped = true;
+        onCancel();
+      }
+    } catch {
+      // Ignore polling errors
+    }
+  }, intervalMs);
+
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
+/**
  * Process a test run job
  */
 async function processTestRun(job: Job<TestRunJobData>): Promise<void> {
@@ -130,6 +168,12 @@ async function processTestRun(job: Job<TestRunJobData>): Promise<void> {
   const db = await getPrisma();
 
   console.log(`[Worker] Processing run: ${runId} (streaming: ${streamingMode})`);
+
+  // Skip if already cancelled before we start
+  if (await isRunCancelled(runId)) {
+    console.log(`[Worker] Run ${runId} already cancelled — skipping`);
+    return;
+  }
 
   // Get the run and its spec, traversing to recording → project for seedPhrase
   const run = await db.testRun.findUnique({
@@ -186,6 +230,13 @@ async function processTestRun(job: Job<TestRunJobData>): Promise<void> {
   });
 
   let result: RunResult;
+  let cancelled = false;
+
+  // Start polling for cancellation — will abort the runner's child process
+  const stopPoller = startCancelPoller(runId, () => {
+    cancelled = true;
+    runner.abort();
+  });
 
   try {
     await job.updateProgress(20);
@@ -225,6 +276,12 @@ async function processTestRun(job: Job<TestRunJobData>): Promise<void> {
     } else {
       // Connection test or no project association — run normally
       result = await runner.run(run.testSpec.code, undefined, seedPhrase);
+    }
+
+    // If cancelled during execution, skip artifact processing
+    if (cancelled) {
+      console.log(`[Worker] Run ${runId} was cancelled during execution`);
+      return;
     }
 
     await job.updateProgress(80);
@@ -329,6 +386,14 @@ async function processTestRun(job: Job<TestRunJobData>): Promise<void> {
       }
     }
   } catch (error) {
+    stopPoller();
+
+    // Don't overwrite CANCELLED status
+    if (cancelled) {
+      console.log(`[Worker] Run ${runId} cancelled — not marking as FAILED`);
+      return;
+    }
+
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
     await db.testRun.update({
@@ -343,6 +408,8 @@ async function processTestRun(job: Job<TestRunJobData>): Promise<void> {
 
     console.error(`[Worker] Run ${runId} failed:`, errorMessage);
     throw error;
+  } finally {
+    stopPoller();
   }
 }
 
@@ -712,6 +779,12 @@ async function processAgentRun(job: Job<AgentRunJobData>): Promise<void> {
 
   console.log(`[Worker] Processing agent run: ${runId}`);
 
+  // Skip if already cancelled before we start
+  if (await isRunCancelled(runId)) {
+    console.log(`[Worker] Agent run ${runId} already cancelled — skipping`);
+    return;
+  }
+
   // Get the run, spec, recording, and project
   const run = await db.testRun.findUnique({
     where: { id: runId },
@@ -767,6 +840,15 @@ async function processAgentRun(job: Job<AgentRunJobData>): Promise<void> {
     dappContext,
   });
 
+  let cancelled = false;
+
+  // Start polling for cancellation
+  const stopPoller = startCancelPoller(runId, () => {
+    cancelled = true;
+    // Agent runner manages its own browser — closing it will cause run() to throw
+    runner.abort?.();
+  });
+
   try {
     // Determine test type
     const testType = (recording as { testType?: string }).testType as 'connection' | 'flow' || analysis.testType;
@@ -811,6 +893,13 @@ async function processAgentRun(job: Job<AgentRunJobData>): Promise<void> {
       connectionRecording as any,
       connectionAnalysis as any,
     );
+
+    // If cancelled during execution, skip artifact processing
+    if (cancelled) {
+      console.log(`[Worker] Agent run ${runId} was cancelled during execution`);
+      stopPoller();
+      return;
+    }
 
     await job.updateProgress(80);
 
@@ -883,6 +972,14 @@ async function processAgentRun(job: Job<AgentRunJobData>): Promise<void> {
 
     // NO self-heal loop for agent mode — the agent adapts in real-time
   } catch (error) {
+    stopPoller();
+
+    // Don't overwrite CANCELLED status
+    if (cancelled) {
+      console.log(`[Worker] Agent run ${runId} cancelled — not marking as FAILED`);
+      return;
+    }
+
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
     await db.testRun.update({
@@ -897,6 +994,8 @@ async function processAgentRun(job: Job<AgentRunJobData>): Promise<void> {
 
     console.error(`[Worker] Agent run ${runId} failed:`, errorMessage);
     throw error;
+  } finally {
+    stopPoller();
   }
 }
 

@@ -234,20 +234,28 @@ class ExecutionService {
     }
 
     try {
-      const job = await this.queue.getJob(`run-${runId}`);
-      if (!job) {
-        return false;
+      // Try all possible job ID formats (spec runs, agent runs)
+      const jobIds = [`run-${runId}`, `agent-${runId}`];
+      let found = false;
+
+      for (const jobId of jobIds) {
+        const job = await this.queue.getJob(jobId);
+        if (!job) continue;
+
+        found = true;
+        const state = await job.getState();
+
+        if (state === 'waiting' || state === 'delayed') {
+          await job.remove();
+          console.log(`[ExecutionService] Removed ${state} job ${jobId}`);
+        } else if (state === 'active') {
+          // DB is already marked CANCELLED by the route handler.
+          // The worker polls DB status and will abort the running process.
+          console.log(`[ExecutionService] Active job ${jobId} — worker will detect CANCELLED status`);
+        }
       }
 
-      const state = await job.getState();
-      if (state === 'waiting' || state === 'delayed') {
-        await job.remove();
-        return true;
-      }
-
-      // For active jobs, we can't directly cancel them
-      // The worker should check for cancellation flag
-      return false;
+      return found;
     } catch (error) {
       console.error('[ExecutionService] Error canceling job:', error);
       return false;

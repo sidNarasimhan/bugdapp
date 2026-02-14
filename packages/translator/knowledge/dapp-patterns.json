@@ -11,7 +11,7 @@
         "Click connect button: page.getByTestId('rk-connect-button').click()",
         "Wait for wallet modal: page.waitForTimeout(1000)",
         "Click MetaMask option: page.getByTestId('rk-wallet-option-metaMask').or(page.getByText('MetaMask')).first().click()",
-        "Approve connection: wallet.approve()",
+        "Approve connection: raceApprove(wallet, page.context(), page)",
         "Verify: page.evaluate(() => window.ethereum?.selectedAddress)"
       ],
       "obstacles": [
@@ -30,7 +30,7 @@
         "Wait for modal: page.waitForTimeout(1500)",
         "Look for 'All wallets' or 'MetaMask' in the modal",
         "Click MetaMask: page.getByText('MetaMask').click()",
-        "Approve connection: wallet.approve()",
+        "Approve connection: raceApprove(wallet, page.context(), page)",
         "Verify: page.evaluate(() => window.ethereum?.selectedAddress)"
       ],
       "obstacles": [
@@ -51,14 +51,13 @@
         "Click 'Continue with a wallet': page.getByRole('button', { name: 'Continue with a wallet' }).click()",
         "Wait for wallet selection: page.waitForTimeout(2000)",
         "Click MetaMask: page.getByRole('button', { name: 'MetaMask' }).click()",
-        "Approve connection: wallet.approve()",
-        "Wait for dApp to process: page.waitForTimeout(3000)",
-        "SIWE Terms: Click dApp 'Sign' button to trigger SIWE popup, then wallet.sign()"
+        "Approve connection + auto-SIWE: raceApprove(wallet, page.context(), page)",
+        "Verify login button gone: expect(loginBtn).not.toBeVisible({ timeout: 15000 })",
+        "If dApp has separate 'Sign' button: use raceApprove(w,c,p,{skipSiwe:true}), click Sign, raceSign(w,c,p)"
       ],
       "obstacles": [
-        "After wallet.approve(), Privy shows a 'Welcome' dialog with Terms of Service",
-        "User must click 'Sign' on the dApp FIRST to trigger the MetaMask SIWE popup",
-        "SIWE (Sign-In With Ethereum) is a SEPARATE step from wallet connection",
+        "raceApprove handles connection + SIWE automatically for most Privy dApps",
+        "If dApp shows a separate 'Sign to Log in' button, use skipSiwe + raceSign pattern",
         "The 'Sign' button may have data-testid='tnc-sign-button' on some dApps"
       ]
     },
@@ -72,7 +71,7 @@
         "Find the connect button using text matching",
         "May need to navigate through a wallet selection modal",
         "Look for MetaMask icon/text in the selection",
-        "Click MetaMask, then wallet.approve()",
+        "Click MetaMask, then raceApprove(wallet, page.context(), page)",
         "Some dApps auto-detect the wallet and don't show selection"
       ],
       "obstacles": [

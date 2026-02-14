@@ -1,4 +1,4 @@
-import { test, expect } from '../../fixtures/wallet.fixture'
+import { test, expect, raceApprove } from '../../fixtures/wallet.fixture'
 
 test('Connect wallet to dApp', async ({ wallet, page }) => {
   // ========================================
@@ -18,22 +18,19 @@ test('Connect wallet to dApp', async ({ wallet, page }) => {
   // ========================================
   // STEP 3: Select MetaMask from wallet options
   // ========================================
-  await page.getByText('MetaMask').click()
+  await page.getByRole('button', { name: /metamask/i })
+    .or(page.locator('button:has-text("MetaMask")'))
+    .first()
+    .click()
 
   // ========================================
-  // STEP 4: Handle MetaMask connection popup
+  // STEP 4: Race-safe approve (handles popups + auto SIWE)
   // ========================================
-  // Use dappwright built-in method — handles MetaMask popup with correct selectors
-  await wallet.approve()
-  await page.waitForTimeout(2000)
+  await raceApprove(wallet, page.context(), page)
 
   // ========================================
-  // STEP 5: Verify connection via ethereum provider
+  // STEP 5: Verify connection via dApp UI
   // ========================================
-  await page.waitForTimeout(3000)
-  const connected = await page.evaluate(() => {
-    const eth = (window as any).ethereum
-    return eth?.selectedAddress || eth?.accounts?.[0] || null
-  })
-  expect(connected?.toLowerCase()).toContain('0x')
+  // Check that connect button is gone (proves full auth completed)
+  await expect(page.getByTestId('connect-wallet-button')).not.toBeVisible({ timeout: 15000 })
 })

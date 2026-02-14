@@ -245,6 +245,22 @@ export interface ReplayManifest {
   baseTimestamp: number;
 }
 
+// --- Screenshot Player types ---
+
+export interface FrameItem {
+  index: number;
+  url: string;
+  label: string;
+  stepIndex?: number;
+  stepDescription?: string;
+}
+
+export interface FrameListResponse {
+  runId: string;
+  frameCount: number;
+  frames: FrameItem[];
+}
+
 export interface SuiteRun {
   id: string;
   projectId: string;
@@ -544,6 +560,11 @@ class ApiClient {
 
   async getSuiteRun(id: string): Promise<SuiteRun> {
     return this.request(`/suite-runs/${id}`);
+  }
+
+  // Frames (screenshot player)
+  async getFrames(runId: string): Promise<FrameListResponse> {
+    return this.request(`/runs/${runId}/frames`);
   }
 
   // Replay

@@ -1,4 +1,4 @@
-import { test, expect } from '../../fixtures/wallet.fixture'
+import { test, expect, raceApprove } from '../../fixtures/wallet.fixture'
 
 test('Connect wallet and trade on Avantis', async ({ wallet, page }) => {
   // ========================================
@@ -34,41 +34,24 @@ test('Connect wallet and trade on Avantis', async ({ wallet, page }) => {
     .click()
 
   // ========================================
-  // STEP 3: Handle MetaMask connection popup
+  // STEP 3: Race-safe approve + auto SIWE
   // ========================================
-  await wallet.approve()
-  await page.waitForTimeout(3000)
+  await raceApprove(wallet, page.context(), page)
 
   // ========================================
-  // STEP 4: Handle SIWE (Sign-In With Ethereum)
-  // After wallet.approve(), Privy shows a "Welcome" dialog with Terms of Service.
-  // Must click "Sign" on the dApp page FIRST to trigger MetaMask SIWE popup.
+  // STEP 4: Verify SIWE completed (dApp UI check)
   // ========================================
-  const signBtn = page.getByRole('button', { name: 'Sign' })
-    .or(page.getByTestId('tnc-sign-button'))
-    .or(page.locator('button:has-text("Sign")'))
-    .first()
-  await signBtn.waitFor({ state: 'visible', timeout: 15000 })
-  await signBtn.click()
-
-  // Handle the MetaMask SIWE signature popup
-  await wallet.sign()
-  await page.waitForTimeout(5000)
+  // Login button should disappear when fully authenticated
+  await expect(page.getByTestId('login-button')
+    .or(page.getByRole('button', { name: /login/i }))
+    .first()).not.toBeVisible({ timeout: 15000 })
 
   // ========================================
-  // STEP 5: Verify connection and SIWE completed
-  // ========================================
-  const connected = await page.evaluate(() => {
-    const eth = (window as any).ethereum
-    return eth?.selectedAddress || eth?.accounts?.[0] || null
-  })
-  expect(connected?.toLowerCase()).toContain('0x')
-
-  // ========================================
-  // STEP 6: Switch to Base network
+  // STEP 5: Switch to Base network
   // ========================================
   await wallet.switchNetwork('Base')
-  await page.waitForTimeout(3000)
+  await page.bringToFront()
+  await page.waitForTimeout(5000)
 
   const chainId = await page.evaluate(() => (window as any).ethereum?.chainId)
   expect(chainId).toBeTruthy()

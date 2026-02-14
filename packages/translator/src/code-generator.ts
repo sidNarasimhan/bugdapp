@@ -127,7 +127,33 @@ export class CodeGenerator {
 
     // Ensure the correct dappwright fixture import is present
     if (!processed.includes("from '../../fixtures/wallet.fixture'")) {
-      processed = `import { test, expect } from '../../fixtures/wallet.fixture'\n\n` + processed;
+      processed = `import { test, expect, raceApprove, raceSign } from '../../fixtures/wallet.fixture'\n\n` + processed;
+    }
+
+    // Ensure raceApprove is in the import if used in the code
+    if (processed.includes('raceApprove') && !processed.includes('raceApprove}') && !processed.includes('raceApprove }') && !processed.includes('raceApprove,')) {
+      processed = processed.replace(
+        /import \{ ([^}]+) \} from '\.\.\/\.\.\/fixtures\/wallet\.fixture'/,
+        (match, imports) => {
+          if (!imports.includes('raceApprove')) {
+            return `import { ${imports}, raceApprove } from '../../fixtures/wallet.fixture'`;
+          }
+          return match;
+        }
+      );
+    }
+
+    // Ensure raceSign is in the import if used in the code
+    if (processed.includes('raceSign') && !processed.includes('raceSign}') && !processed.includes('raceSign }') && !processed.includes('raceSign,')) {
+      processed = processed.replace(
+        /import \{ ([^}]+) \} from '\.\.\/\.\.\/fixtures\/wallet\.fixture'/,
+        (match, imports) => {
+          if (!imports.includes('raceSign')) {
+            return `import { ${imports}, raceSign } from '../../fixtures/wallet.fixture'`;
+          }
+          return match;
+        }
+      );
     }
 
     return processed;

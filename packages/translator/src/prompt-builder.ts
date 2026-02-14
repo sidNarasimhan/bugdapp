@@ -150,71 +150,69 @@ These methods use correct selectors internally and handle timing/retries.
 
 ### Wallet Connection:
 \`\`\`typescript
+import { test, expect, raceApprove, raceSign } from '../../fixtures/wallet.fixture'
+
 // 1. Click the dApp's connect button to trigger MetaMask popup
 await page.locator('#connectButton').click()
 
-// 2. Let dappwright handle the MetaMask popup
-await wallet.approve()
+// 2. Race-safe approve — handles already-open popups + manual notification fallback
+// For Privy dApps that auto-trigger SIWE: raceApprove handles both connection + SIWE
+await raceApprove(wallet, page.context(), page)
 
-// 3. Verify connection using ethereum provider (most reliable method)
-// Do NOT look for visible 0x address text — many dApps don't show it
-await page.waitForTimeout(3000)
-const connected = await page.evaluate(() => {
-  const eth = (window as any).ethereum
-  return eth?.selectedAddress || eth?.accounts?.[0] || null
-})
-expect(connected?.toLowerCase()).toContain('0x')
+// 3. Verify connection by checking dApp UI (NOT just window.ethereum)
+// Check that the login/connect button DISAPPEARS — this proves SIWE completed
+await expect(page.getByRole('button', { name: /login|connect/i }).first()).not.toBeVisible({ timeout: 15000 })
 \`\`\`
 
-IMPORTANT: Do NOT verify wallet connection by looking for visible address text like:
-\`page.getByText(/0x[a-fA-F0-9]/).toBeVisible()\` — this is UNRELIABLE.
-Many dApps show truncated addresses with "...", use avatars, or don't show the address at all.
-ALWAYS use \`page.evaluate()\` to check \`window.ethereum.selectedAddress\` instead.
+**CRITICAL**: ALWAYS use \`raceApprove\` instead of bare \`wallet.approve()\`.
+MetaMask Manifest V3 often fails to auto-open popup windows. \`raceApprove\` handles:
+- Already-open popups (race condition)
+- Manual \`chrome-extension://notification.html\` fallback (MV3 popup bug)
+- Auto SIWE signing (polls for MetaMask SIWE popup after connection)
 
-### Signing Messages:
+**CRITICAL**: Verify dApp UI, NOT just \`window.ethereum.selectedAddress\`.
+\`selectedAddress\` can be set after connection even if SIWE is incomplete.
+Always verify the dApp UI reflects the logged-in state (login button gone, user address visible, etc).
+
+### When SIWE needs an explicit dApp button click:
+Some dApps show a "Sign to Log in" or "Sign" button AFTER wallet connection.
+Use \`raceApprove\` with \`skipSiwe: true\` for connection, then \`raceSign\` after clicking the button:
 \`\`\`typescript
-// 1. Click the dApp's sign button
-await page.getByRole('button', { name: /sign/i }).click()
+import { test, expect, raceApprove, raceSign } from '../../fixtures/wallet.fixture'
 
-// 2. Let dappwright handle the MetaMask signature popup
-await wallet.sign()
+// Connection only (skip auto-SIWE polling)
+await raceApprove(wallet, page.context(), page, { skipSiwe: true })
 
-// 3. Verify signature completed
-await page.waitForTimeout(2000)
+// Click the dApp's sign/login button
+await page.getByRole('button', { name: /sign to log in/i }).click()
+
+// Handle MetaMask SIWE popup (race-safe with manual notification fallback)
+await raceSign(wallet, page.context(), page)
 \`\`\`
 
-### SIWE (Sign-In With Ethereum) — CRITICAL PATTERN:
-Many dApps require SIWE authentication AFTER wallet connection. This is a TWO-STEP process:
-1. \`wallet.approve()\` approves the initial connection
-2. The dApp then shows a "Terms of Service" / "Welcome" / "Sign In" dialog
-3. You must click "Sign" on the dApp page FIRST to trigger the MetaMask SIWE popup
-4. Then call \`wallet.sign()\` to handle the MetaMask signature popup
+### How to detect which pattern to use:
+- **Auto-SIWE (use plain \`raceApprove\`)**: Privy dApps that show "Connecting..." or "Sign to verify" AUTOMATICALLY after wallet selection. The dApp triggers SIWE without a separate button click.
+- **Explicit SIWE (use \`skipSiwe\` + \`raceSign\`)**: dApps with a separate "Sign to Log in" / "Sign" button that the user must click to trigger SIWE. Look for recording steps that click a sign button AFTER connection.
+- **No SIWE (use \`skipSiwe\`)**: dApps that only need wallet connection without signing.
 
-**How to detect SIWE in recordings:**
-- Look for \`personal_sign\` web3 method AFTER \`eth_requestAccounts\`
-- Look for a "Sign" / "Sign In" button click AFTER wallet connection steps
-- Look for \`data-testid="tnc-sign-button"\` or similar TOS buttons
-- Privy-based dApps (detected by \`#privy-modal-content\`, \`#privy-dialog\`) almost always use SIWE
-
+### Confirming Transactions:
 \`\`\`typescript
-// After wallet.approve() succeeds, handle SIWE Terms dialog:
+// 1. Click the dApp's action button that triggers a transaction
+await page.getByRole('button', { name: /swap|trade|send/i }).click()
+
+// 2. Let dappwright handle the MetaMask transaction popup
+await wallet.confirmTransaction()
+
+// 3. Verify transaction completed
 await page.waitForTimeout(3000)
-
-// Click "Sign" on the dApp's Terms/Welcome dialog
-const signBtn = page.getByRole('button', { name: 'Sign' })
-  .or(page.getByTestId('tnc-sign-button'))
-  .or(page.locator('button:has-text("Sign")'))
-  .first()
-await signBtn.waitFor({ state: 'visible', timeout: 15000 })
-await signBtn.click()
-
-// Handle MetaMask SIWE signature popup
-await wallet.sign()
-await page.waitForTimeout(5000)
 \`\`\`
 
-**IMPORTANT**: The dApp "Sign" button must be clicked BEFORE calling \`wallet.sign()\`.
-\`wallet.sign()\` only handles the MetaMask popup — it does NOT click the dApp button.
+### Network Switching:
+The test wallet starts on Ethereum Mainnet. MetaMask v13.17 has **built-in support** for
+popular L2 networks (Base, Arbitrum, Optimism, Polygon, etc.), so they do NOT need to be added.
+
+**ALWAYS use \`wallet.switchNetwork()\` directly** for network switching. Do NOT click dApp
+"Switch Network" buttons or rely on popup-based approval.
 
 ### Confirming Transactions:
 \`\`\`typescript
@@ -270,9 +268,11 @@ Do NOT call \`wallet.approve()\` or \`wallet.confirmNetworkSwitch()\` for networ
 Instead, SKIP the network switch click step and use \`wallet.switchNetwork()\` directly.
 
 ### Available dappwright methods on the wallet object:
-- \`wallet.approve()\` - approve wallet connection ONLY
-- \`wallet.sign()\` - sign a message (personal_sign, signTypedData)
-- \`wallet.signin()\` - Sign-In with Ethereum (EIP-4361 SIWE)
+- \`raceApprove(wallet, page.context(), page)\` - **ALWAYS USE THIS** for wallet connection (race-safe + auto-SIWE)
+- \`raceApprove(wallet, page.context(), page, { skipSiwe: true })\` - connection only, handle SIWE separately
+- \`raceSign(wallet, page.context(), page)\` - race-safe MetaMask sign (use after clicking dApp sign button)
+- \`wallet.approve()\` - DEPRECATED, do NOT use (MV3 popup bug)
+- \`wallet.sign()\` - DEPRECATED for specs, use \`raceSign()\` instead (same MV3 popup bug)
 - \`wallet.confirmTransaction()\` - confirm a transaction (optionally: \`{ gas, gasLimit, priority }\`)
 - \`wallet.reject()\` - reject any pending request
 - \`wallet.switchNetwork('Network Name')\` - switch to a network (ALWAYS use this for network changes)
@@ -484,50 +484,28 @@ Privy-based dApps ALWAYS require SIWE (Sign-In With Ethereum) after wallet conne
 The recording may NOT contain the \`personal_sign\` step because the user's existing wallet
 auto-handled it, but a fresh MetaMask wallet WILL be prompted.
 
-**IMPORTANT**: Privy auto-triggers SIWE — the MetaMask popup opens AUTOMATICALLY after
-wallet.approve(). There is NO "Sign" button to click on the dApp. The MetaMask SIWE popup
-may already be open before your code runs, so \`wallet.sign()\` (which uses waitForEvent)
-may miss it. You MUST use race-safe popup detection.
+**GOOD NEWS**: \`raceApprove(wallet, page.context(), page)\` handles SIWE automatically.
+Just call \`raceApprove\` and it will:
+1. Approve the connection (race-safe — detects already-open popups)
+2. Auto-detect and sign the SIWE popup
 
-**You MUST add this SIWE flow after wallet.approve():**
 \`\`\`typescript
-// After wallet.approve(), Privy auto-triggers SIWE
-// The MetaMask popup may already be open (race condition with wallet.sign())
-await page.waitForTimeout(2000)
+// Click MetaMask in Privy modal
+await page.getByRole('button', { name: /metamask/i }).click()
 
-// Race-safe SIWE handling: check for already-open popup first
-const context = page.context()
-const existingPopup = context.pages().find(
-  (p: any) => p.url().includes('notification') && !p.isClosed()
-)
+// Race-safe approve + auto SIWE — ONE call does everything
+await raceApprove(wallet, page.context(), page)
 
-if (existingPopup) {
-  // MetaMask SIWE popup is already open
-  await existingPopup.bringToFront()
-  await existingPopup.getByTestId('confirm-footer-button').click()
-  if (!existingPopup.isClosed()) {
-    await existingPopup.waitForEvent('close', { timeout: 15000 }).catch(() => {})
-  }
-} else {
-  // Popup hasn't appeared yet — wait for it
-  try {
-    const popup = await context.waitForEvent('page', { timeout: 10000 })
-    await popup.bringToFront()
-    await popup.getByTestId('confirm-footer-button').click()
-    if (!popup.isClosed()) {
-      await popup.waitForEvent('close', { timeout: 15000 }).catch(() => {})
-    }
-  } catch {
-    // Try wallet.sign() as last resort
-    try { await wallet.sign() } catch { /* SIWE may have already completed */ }
-  }
-}
-await page.waitForTimeout(5000)
+// Verify connection
+const connected = await page.evaluate(() => {
+  const eth = (window as any).ethereum
+  return eth?.selectedAddress || eth?.accounts?.[0] || null
+})
+expect(connected?.toLowerCase()).toContain('0x')
 \`\`\`
 
-Do NOT use just \`wallet.sign()\` alone — it WILL miss the already-open popup.
-Do NOT wrap this in try/catch that silently skips SIWE — the test will pass but authentication
-will be incomplete.\n`;
+Do NOT use bare \`wallet.approve()\` — it WILL miss already-open popups.
+Do NOT write manual popup detection code — \`raceApprove\` handles it all.\n`;
     }
 
     // Add console log context if available (filtered for errors/warnings)
@@ -669,8 +647,8 @@ ${stepsJson}
 
 ## Generation Requirements
 - Target wallet: MetaMask
-- Use dappwright built-in methods: wallet.approve(), wallet.sign(), wallet.confirmTransaction()
-- Import from '../../fixtures/wallet.fixture' — NOT from '@playwright/test' or '@synthetixio/synpress'
+- Use dappwright built-in methods: raceApprove(), raceSign(), wallet.confirmTransaction()
+- Import: \`import { test, expect, raceApprove, raceSign } from '../../fixtures/wallet.fixture'\`
 - Generate robust selectors with fallbacks using .or() chains with .first()
 - Prefer: data-testid > getByRole > button:has-text() > original recorded CSS selector
 - **CRITICAL: Each step has a \`selector\` field — ALWAYS include it as the LAST .or() fallback**
@@ -738,8 +716,8 @@ Elements were not appearing in time.
       case 'wallet':
         categoryGuidance = `## Wallet Interaction Fix Strategy
 MetaMask/dappwright interaction failed.
-- Ensure wallet.approve() is called AFTER the dApp triggers the popup (not before)
-- Add sufficient delay (3-5s) after triggering wallet popup before calling wallet methods
+- ALWAYS use raceApprove(wallet, page.context(), page) instead of wallet.approve()
+- raceApprove handles already-open popups + auto SIWE — no manual popup code needed
 - Use wallet.switchNetwork() directly instead of clicking network switch buttons
 - Check if the dApp needs a specific wallet selection step (click "MetaMask" in modal)`;
         break;
