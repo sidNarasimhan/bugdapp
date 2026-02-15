@@ -452,7 +452,20 @@ Rules:
 - Every wallet.confirmTransaction() is its own step
 - Group related .click() + .waitForTimeout() + .fill() into the same step
 - expect() verification can be its own step or grouped with the action it verifies
-- Number sequentially starting from 1`;
+- Number sequentially starting from 1
+- **CRITICAL: Each step MUST be self-contained.** Do NOT reference variables (const/let) defined in a previous step. Each step is executed independently by the hybrid runner. If you need to check a locator from a prior step, re-create it inline:
+  \`\`\`typescript
+  // BAD — loginButton defined in Step 2, referenced in Step 6
+  // STEP 2:
+  const loginButton = page.locator('...')
+  await loginButton.click()
+  // STEP 6:
+  await expect(loginButton).not.toBeVisible() // ERROR: loginButton not defined!
+
+  // GOOD — self-contained
+  // STEP 6:
+  await expect(page.locator('button:has-text("Login")')).not.toBeVisible({ timeout: 15000 })
+  \`\`\``;
   }
 
   /**
