@@ -292,9 +292,15 @@ function elementDescToSelector(desc?: string): string {
 /**
  * Translate agent actions into executable spec code.
  * Used to patch specs with what the agent learned.
+ *
+ * ONLY includes state-changing actions (clicks, typing, wallet ops).
+ * Skips diagnostic/read-only actions (evaluate, snapshot) that the agent
+ * uses to investigate the page but that don't belong in a spec.
  */
 function agentActionsToSpecCode(actions: AgentAction[]): string {
   const lines: string[] = ['// Auto-patched by agent recovery'];
+  let hasStateChanges = false;
+
   for (const action of actions) {
     if (!action.success) continue;
     switch (action.tool) {
@@ -302,24 +308,27 @@ function agentActionsToSpecCode(actions: AgentAction[]): string {
         const selector = elementDescToSelector(action.elementDesc);
         lines.push(`await ${selector}.click()`);
         lines.push('await page.waitForTimeout(500)');
+        hasStateChanges = true;
         break;
       }
       case 'browser_type': {
         const selector = elementDescToSelector(action.elementDesc);
         const text = action.input.text as string || '';
         lines.push(`await ${selector}.fill(${JSON.stringify(text)})`);
+        hasStateChanges = true;
         break;
       }
       case 'browser_press_key': {
         const key = action.input.key as string || 'Enter';
         lines.push(`await page.keyboard.press('${key}')`);
+        hasStateChanges = true;
         break;
       }
-      case 'browser_evaluate': {
-        const expr = action.input.expression as string || '';
-        if (expr) {
-          lines.push(`await page.evaluate(() => { ${expr} })`);
-        }
+      case 'browser_select': {
+        const selector = elementDescToSelector(action.elementDesc);
+        const value = action.input.value as string || '';
+        lines.push(`await ${selector}.selectOption(${JSON.stringify(value)})`);
+        hasStateChanges = true;
         break;
       }
       case 'wallet_switch_network': {
@@ -327,21 +336,31 @@ function agentActionsToSpecCode(actions: AgentAction[]): string {
         lines.push(`await wallet.switchNetwork('${name}')`);
         lines.push('await page.bringToFront()');
         lines.push('await page.waitForTimeout(5000)');
+        hasStateChanges = true;
         break;
       }
       case 'wallet_approve': {
         lines.push('await raceApprove(wallet, context, page)');
+        hasStateChanges = true;
         break;
       }
       case 'wallet_confirm_transaction': {
         lines.push('await wallet.confirmTransaction()');
+        hasStateChanges = true;
         break;
       }
+      // Skip read-only/diagnostic tools:
+      // browser_evaluate — agent uses this to inspect page state, not to change it
+      // browser_snapshot — page observation only
+      // browser_navigate — agent might navigate to check something; specs handle their own navigation
       default:
-        // Skip unknown tools
         break;
     }
   }
+
+  // If no state-changing actions were found, return empty string
+  // (no point patching with just the comment header)
+  if (!hasStateChanges) return '';
   return lines.join('\n');
 }
 
@@ -563,11 +582,13 @@ export async function runHybrid(
                 await executeStepCode(step.code, page, wallet!, context!);
                 // Original code works now! Patch = dismissal prefix + original code
                 const prefixCode = agentActionsToSpecCode(dismissResult.actions);
-                specPatches.push({
-                  stepNumber: step.number,
-                  patchedCode: prefixCode + '\n' + step.code,
-                  reason: `Cleared blocker: ${dismissResult.summary}`,
-                });
+                if (prefixCode) {
+                  specPatches.push({
+                    stepNumber: step.number,
+                    patchedCode: prefixCode + '\n' + step.code,
+                    reason: `Cleared blocker: ${dismissResult.summary}`,
+                  });
+                }
                 const durationMs = Date.now() - stepStart;
                 stepResults.push({
                   stepNumber: step.number,
@@ -669,14 +690,16 @@ export async function runHybrid(
                 }
 
                 // Save spec patch — but EXCLUDE actions that belong to subsequent steps
+                // and skip diagnostic-only actions (evaluate, snapshot)
                 if (fullResult.actions.length > 0) {
                   const patchActions = overlappingTools.size > 0
                     ? fullResult.actions.filter(a => !overlappingTools.has(a.tool))
                     : fullResult.actions;
-                  if (patchActions.length > 0) {
+                  const patchCode = agentActionsToSpecCode(patchActions);
+                  if (patchCode) {
                     specPatches.push({
                       stepNumber: step.number,
-                      patchedCode: agentActionsToSpecCode(patchActions),
+                      patchedCode: patchCode,
                       reason: fullResult.summary,
                     });
                   }
