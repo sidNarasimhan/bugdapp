@@ -214,25 +214,6 @@ popular L2 networks (Base, Arbitrum, Optimism, Polygon, etc.), so they do NOT ne
 **ALWAYS use \`wallet.switchNetwork()\` directly** for network switching. Do NOT click dApp
 "Switch Network" buttons or rely on popup-based approval.
 
-### Confirming Transactions:
-\`\`\`typescript
-// 1. Click the dApp's action button that triggers a transaction
-await page.getByRole('button', { name: /swap|trade|send/i }).click()
-
-// 2. Let dappwright handle the MetaMask transaction popup
-await wallet.confirmTransaction()
-
-// 3. Verify transaction completed
-await page.waitForTimeout(3000)
-\`\`\`
-
-### Network Switching:
-The test wallet starts on Ethereum Mainnet. MetaMask v13.17 has **built-in support** for
-popular L2 networks (Base, Arbitrum, Optimism, Polygon, etc.), so they do NOT need to be added.
-
-**ALWAYS use \`wallet.switchNetwork()\` directly** for network switching. Do NOT click dApp
-"Switch Network" buttons or rely on popup-based approval.
-
 When the recording shows \`wallet_switchEthereumChain\` or \`wallet_addEthereumChain\`,
 or when the recording shows a click on a "Switch to [Network]" / "Wrong network" button,
 replace ALL of that with a single \`wallet.switchNetwork()\` call:
@@ -275,6 +256,33 @@ Only use \`wallet.addNetwork()\` for custom/unknown networks not listed above.
 Do NOT click any "Switch Network" / "Wrong network" / "Switch to Base" buttons from the recording.
 Do NOT call \`wallet.approve()\` or \`wallet.confirmNetworkSwitch()\` for network changes.
 Instead, SKIP the network switch click step and use \`wallet.switchNetwork()\` directly.
+
+### Form Input Handling (DETERMINISTIC)
+For number inputs, text fields, and other form elements, follow this exact pattern:
+
+\`\`\`typescript
+// For text/number inputs: ALWAYS use getByTestId if available, then getByLabel, then recorded CSS
+const input = page.getByTestId('collateral-input')
+  .or(page.getByLabel(/collateral/i))
+  .or(page.locator('recorded-css-selector'))
+  .first()
+
+// Clear and fill (NOT type)
+await input.click()
+await input.fill('100')
+
+// Verify the value was set
+await expect(input).toHaveValue('100')
+await page.waitForTimeout(500)
+\`\`\`
+
+**RULES for form inputs:**
+- ALWAYS use \`.fill()\` not \`.type()\` — fill replaces the entire value atomically
+- ALWAYS \`.click()\` the input first to focus it
+- ALWAYS verify with \`expect(input).toHaveValue()\` after filling
+- For number inputs (spinbuttons): use \`getByTestId\` > \`getByLabel\` > \`locator('[data-testid="..."]')\` > recorded CSS
+- Do NOT use \`getByRole('spinbutton')\` — dApps often have multiple spinbuttons and ordering is unreliable
+- Do NOT use \`.nth()\` or positional selectors for inputs — they break when UI changes
 
 ### Available dappwright methods on the wallet object:
 - \`raceApprove(wallet, page.context(), page)\` - **ALWAYS USE THIS** for wallet connection (race-safe + auto-SIWE)
@@ -338,36 +346,35 @@ expect(connected?.toLowerCase()).toContain('0x')
 - Real-time trading apps have constant websocket activity that prevents networkidle
 - Add \`page.waitForTimeout(3000)\` after navigation to let page stabilize
 
-### Selector Strategy (Resilience Priority)
-Use selectors in this priority order, with fallback chains:
-1. \`data-testid\`: \`page.getByTestId('connect-button')\`
-2. \`getByRole\`: \`page.getByRole('button', { name: /connect/i })\`
-3. CSS \`button:has-text()\`: \`page.locator('button:has-text("Connect")')\`
-4. Original recorded CSS selector (ALWAYS include as last fallback)
+### Selector Strategy (DETERMINISTIC — follow this EXACTLY)
+You MUST use selectors in this EXACT priority order. Do NOT vary the approach between runs.
 
-**CRITICAL: ALWAYS include the original recorded CSS selector as the LAST .or() fallback.**
-Each recording step has a \`selector\` field — this is the EXACT selector that worked when the user recorded.
-Use it as the final fallback to guarantee the test can find the element.
+**Step 1: Check the recording step's metadata fields** in this order:
+1. \`dataTestId\` → use \`page.getByTestId('value')\`
+2. \`ariaLabel\` → use \`page.getByLabel('value')\`
+3. \`role\` + \`text\` → use \`page.getByRole('role', { name: /text/i })\`
+4. \`text\` on a button → use \`page.locator('button:has-text("text")')\`
+5. \`selector\` (recorded CSS) → use \`page.locator('recorded-selector')\`
 
-For maximum resilience, use .or() chains with .first():
+**Step 2: Build the .or() chain** using ONLY the selectors that exist in the metadata.
+Do NOT invent selectors that aren't in the recording data. The chain should be:
 \`\`\`typescript
+// Example: step has dataTestId="connect-btn", role="button", text="Connect Wallet", selector="div > button.primary"
 await page.getByTestId('connect-btn')
   .or(page.getByRole('button', { name: /connect wallet/i }))
   .or(page.locator('button:has-text("Connect Wallet")'))
-  .or(page.locator('original-recorded-selector-from-step'))  // ALWAYS include this!
+  .or(page.locator('div > button.primary'))  // recorded CSS — ALWAYS last
   .first()
   .click()
 \`\`\`
 
-**WARNING about getByText:** Do NOT use \`page.getByText()\` for clicking elements inside modals or portals.
-\`getByText\` matches ANY element that contains the text, including invisible parent containers
-(e.g., \`<div id="headlessui-portal-root">\` or \`<div id="privy-modal-content">\`).
-Instead, use \`page.locator('button:has-text("...")')\` which restricts to button elements,
-or use \`page.getByRole('button', { name: /text/i })\` which restricts to role=button.
-
+**RULES:**
 - ALWAYS add \`.first()\` after \`.or()\` chains
-- Use case-insensitive regex: \`{ name: /connect/i }\`
-- Prefer \`button:has-text()\` over \`getByText()\` for click targets
+- ALWAYS include the recorded CSS selector as the LAST \`.or()\` fallback
+- Use case-insensitive regex for role names: \`{ name: /text/i }\`
+- Do NOT use \`page.getByText()\` — it matches parent containers. Use \`button:has-text()\` or \`getByRole\` instead
+- For input fields: prefer \`getByTestId\` > \`getByLabel\` > \`getByRole('textbox')\` > recorded CSS
+- Do NOT use \`nth-child\` or positional selectors unless the recording's CSS selector uses them
 
 ### Verifying Click Effects (Prevent False Positives)
 **.or().first() chains can match the WRONG element silently.** After important clicks that should open a menu/modal/dropdown, ALWAYS verify the expected result appeared:
@@ -416,6 +423,16 @@ expect(chainId).toBe('0x2105')
 Do NOT include any custom MetaMask popup handling functions.
 Do NOT import from '@synthetixio/synpress' or '@tenkeylabs/dappwright' directly.
 Do NOT include any explanation text outside the code. Return only the TypeScript code.
+
+## CRITICAL: Only Verify What Was Recorded
+Do NOT invent verification steps for outcomes that weren't captured in the recording.
+- If the recording ends at "click Create Account", the last step should be that click — NOT an assertion about the account being created.
+- If the recording ends at "click Place Order", the last step should verify the order button was clicked — NOT that the trade executed.
+- Only add \`expect()\` assertions for state changes that are VISIBLE in subsequent recording steps.
+- The ONLY assertions you should add beyond the recording are:
+  1. Wallet connection verification (always needed — dappwright starts disconnected)
+  2. Network switch verification (always needed — RPC polling)
+- For the final step: if the recording shows a click as the last action, verify the click target was clickable and was clicked. Do NOT speculate about what happens after.
 
 ## CRITICAL: Step Markers for Hybrid Execution
 You MUST wrap each logical step in step marker comments. The test runner uses these to execute
@@ -702,6 +719,7 @@ ${stepsJson}
 - Prefer: data-testid > getByRole > button:has-text() > original recorded CSS selector
 - **CRITICAL: Each step has a \`selector\` field — ALWAYS include it as the LAST .or() fallback**
 - Do NOT use page.getByText() for clicking — use page.locator('button:has-text(...)') or page.getByRole('button') instead
+- **CRITICAL: Do NOT invent verification steps beyond what the recording captured** — if the recording ends at a button click, end the test there
 - Add appropriate waits after wallet interactions
 - Handle conditional UI states (modals that may or may not appear)
 - Use expect() assertions to verify wallet connection and signing succeeded

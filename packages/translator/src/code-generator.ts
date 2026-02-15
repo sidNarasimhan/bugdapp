@@ -52,14 +52,14 @@ export class CodeGenerator {
           systemPrompt,
           userPrompt,
           images: stepScreenshots,
-          temperature: 0.2,
+          temperature: 0,
         });
         code = response.code;
       } else {
         const response = await this.client.generateCode({
           systemPrompt,
           userPrompt,
-          temperature: 0.2,
+          temperature: 0,
         });
         code = response.code;
       }
@@ -256,14 +256,14 @@ export class CodeGenerator {
             base64: s.base64,
             mediaType: s.mediaType,
           })),
-          temperature: 0.3, // Slightly higher temp for creative fixes
+          temperature: 0,
         });
         code = response.code;
       } else {
         const response = await this.client.generateCode({
           systemPrompt,
           userPrompt: retryPrompt,
-          temperature: 0.3,
+          temperature: 0,
         });
         code = response.code;
       }
@@ -318,7 +318,7 @@ export class CodeGenerator {
       const response = await this.client.generateCode({
         systemPrompt,
         userPrompt,
-        temperature: 0.2,
+        temperature: 0,
       });
 
       return {
