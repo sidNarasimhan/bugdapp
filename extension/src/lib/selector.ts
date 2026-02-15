@@ -58,6 +58,9 @@ export interface ElementMetadata {
   type?: string;
   name?: string;
   placeholder?: string;
+  dataState?: string;
+  ariaChecked?: string;
+  nearbyLabel?: string;
 }
 
 /**
@@ -91,6 +94,40 @@ export function getElementMetadata(element: Element): ElementMetadata {
   const dataTestId = element.getAttribute('data-testid');
   if (dataTestId) {
     metadata.dataTestId = dataTestId;
+  }
+
+  // Check parent for role/aria (toggle switches often have role on parent)
+  const parent = element.parentElement;
+  if (parent) {
+    const parentRole = parent.getAttribute('role');
+    if (parentRole && !role) {
+      metadata.role = parentRole;
+    }
+    const parentAriaLabel = parent.getAttribute('aria-label');
+    if (parentAriaLabel && !ariaLabel) {
+      metadata.ariaLabel = parentAriaLabel;
+    }
+  }
+
+  // Capture data-state (used by Radix/shadcn toggles)
+  const dataState = element.getAttribute('data-state');
+  if (dataState) {
+    metadata.dataState = dataState;
+  }
+
+  // Capture aria-checked (standard toggle attribute)
+  const ariaChecked = element.getAttribute('aria-checked');
+  if (ariaChecked) {
+    metadata.ariaChecked = ariaChecked;
+  }
+
+  // For bare spans/divs with no text, look for sibling label text
+  const tagName = element.tagName.toLowerCase();
+  if (!metadata.text && (tagName === 'span' || tagName === 'div')) {
+    const siblingLabel = parent?.querySelector('label, [class*="label"]');
+    if (siblingLabel?.textContent?.trim()) {
+      metadata.nearbyLabel = siblingLabel.textContent.trim().slice(0, 50);
+    }
   }
 
   // Get input-specific attributes

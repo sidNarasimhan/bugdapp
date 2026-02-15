@@ -47,9 +47,8 @@ export default function TestSpecPage() {
   const runMutation = useMutation({
     mutationFn: (mode: ExecutionMode) => {
       const options = {
-        headless: mode === 'headless',
-        streamingMode: mode === 'live' ? 'VNC' as const : mode === 'headed' || mode === 'agent' ? 'VIDEO' as const : 'NONE' as const,
-        ...(mode === 'agent' && { executionMode: 'AGENT' as const }),
+        headless: false,
+        streamingMode: mode === 'live' ? 'VNC' as const : 'NONE' as const,
       };
       return api.createTestRun(id, options);
     },

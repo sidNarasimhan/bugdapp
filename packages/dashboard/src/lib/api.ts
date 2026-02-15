@@ -76,13 +76,14 @@ export interface AgentRunData {
   steps: AgentStepData[];
   usage: {
     totalApiCalls: number;
-    inputTokens: number;
-    outputTokens: number;
-    cacheReadTokens: number;
-    cacheCreationTokens: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheCreationTokens?: number;
     estimatedCostUsd: number;
   };
   model: string;
+  mode?: 'agent' | 'hybrid';
 }
 
 export interface TestRun {
@@ -104,7 +105,7 @@ export interface TestRun {
   vncPort?: number;
   streamingMode?: 'NONE' | 'VNC' | 'VIDEO';
   // Agent mode fields
-  executionMode?: 'SPEC' | 'AGENT';
+  executionMode?: 'SPEC' | 'AGENT' | 'HYBRID';
   agentData?: AgentRunData | null;
 }
 
@@ -411,7 +412,7 @@ class ApiClient {
 
   async createTestRun(
     testSpecId: string,
-    options: { headless?: boolean; streamingMode?: 'NONE' | 'VNC' | 'VIDEO'; executionMode?: 'SPEC' | 'AGENT' } = {}
+    options: { headless?: boolean; streamingMode?: 'NONE' | 'VNC' | 'VIDEO'; executionMode?: 'SPEC' | 'AGENT' | 'HYBRID' } = {}
   ): Promise<TestRun & { queued: boolean; message: string }> {
     const { headless = false, streamingMode = 'NONE', executionMode } = options;
     return this.request('/runs', {

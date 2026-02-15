@@ -68,10 +68,13 @@ export function AgentReplayTimeline({ agentData, runId, passed }: AgentReplayTim
     });
   }, []);
 
+  const isHybrid = agentData.mode === 'hybrid';
   const totalCalls = agentData.usage.totalApiCalls;
   const totalCost = agentData.usage.estimatedCostUsd;
   const totalDuration = agentData.steps.reduce((sum, s) => sum + s.durationMs, 0);
   const passedSteps = agentData.steps.filter((s) => s.status === 'passed').length;
+  const specSteps = agentData.steps.filter((s) => s.apiCalls === 0).length;
+  const aiSteps = agentData.steps.length - specSteps;
 
   return (
     <div className="space-y-4">
@@ -80,7 +83,9 @@ export function AgentReplayTimeline({ agentData, runId, passed }: AgentReplayTim
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <Cpu className="h-5 w-5 text-purple-400" />
-            <span className="text-white font-medium">Agent Run</span>
+            <span className="text-white font-medium">
+              {isHybrid ? 'Hybrid Run' : 'Agent Run'}
+            </span>
             <span
               className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
                 passed ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'
@@ -90,10 +95,12 @@ export function AgentReplayTimeline({ agentData, runId, passed }: AgentReplayTim
             </span>
           </div>
           <div className="flex items-center gap-4 text-sm text-zinc-400">
-            <span className="flex items-center gap-1">
-              <Zap className="h-3.5 w-3.5" />
-              {totalCalls} calls
-            </span>
+            {totalCalls > 0 && (
+              <span className="flex items-center gap-1">
+                <Zap className="h-3.5 w-3.5" />
+                {totalCalls} AI calls
+              </span>
+            )}
             <span className="flex items-center gap-1">
               <DollarSign className="h-3.5 w-3.5" />
               ${totalCost.toFixed(3)}
@@ -109,6 +116,11 @@ export function AgentReplayTimeline({ agentData, runId, passed }: AgentReplayTim
         </div>
         <div className="mt-2 text-xs text-zinc-500">
           {passedSteps}/{agentData.steps.length} steps passed
+          {isHybrid && specSteps > 0 && (
+            <span className="ml-2">
+              ({specSteps} spec, {aiSteps} AI)
+            </span>
+          )}
         </div>
       </div>
 
@@ -179,8 +191,17 @@ function StepCard({
           </span>
         </div>
         <div className="flex items-center gap-3">
+          {step.apiCalls > 0 ? (
+            <span className="text-xs text-purple-400/70">
+              AI {step.apiCalls} calls
+            </span>
+          ) : (
+            <span className="text-xs text-emerald-400/70">
+              spec
+            </span>
+          )}
           <span className="text-xs text-zinc-500">
-            {step.apiCalls} calls, {formatDuration(step.durationMs)}
+            {formatDuration(step.durationMs)}
           </span>
           {step.actions.length > 0 && (
             <span className="text-xs text-zinc-600">

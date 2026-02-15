@@ -156,7 +156,82 @@ export class CodeGenerator {
       );
     }
 
+    // Ensure step markers are present for hybrid execution
+    processed = this.addStepMarkers(processed);
+
     return processed;
+  }
+
+  /**
+   * Insert STEP markers if none found, by detecting key patterns.
+   * This is a fallback — the prompt instructs Claude to add them,
+   * but if it forgets, this ensures hybrid mode still works.
+   */
+  private addStepMarkers(code: string): string {
+    // If markers already exist, skip
+    if (/\/\/\s*STEP\s+\d+:/.test(code)) return code;
+
+    const lines = code.split('\n');
+    const result: string[] = [];
+    let stepNum = 0;
+    let inTestBody = false;
+    let braceDepth = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+
+      // Detect test body start
+      if (!inTestBody && /test\s*\(/.test(line)) {
+        inTestBody = true;
+        for (const ch of line) {
+          if (ch === '{') braceDepth++;
+          if (ch === '}') braceDepth--;
+        }
+        result.push(line);
+        continue;
+      }
+
+      if (inTestBody) {
+        for (const ch of line) {
+          if (ch === '{') braceDepth++;
+          if (ch === '}') braceDepth--;
+        }
+
+        // Detect step-worthy lines and insert markers before them
+        let markerDesc: string | null = null;
+
+        if (/page\.goto\s*\(/.test(trimmed)) {
+          const urlMatch = trimmed.match(/page\.goto\s*\(\s*['"]([^'"]+)['"]/);
+          markerDesc = urlMatch ? `Navigate to ${urlMatch[1]}` : 'Navigate to page';
+        } else if (/raceApprove\s*\(/.test(trimmed)) {
+          markerDesc = 'Approve wallet connection';
+        } else if (/raceSign\s*\(/.test(trimmed)) {
+          markerDesc = 'Sign message';
+        } else if (/wallet\.switchNetwork\s*\(/.test(trimmed)) {
+          const nameMatch = trimmed.match(/wallet\.switchNetwork\s*\(\s*['"]([^'"]+)['"]/);
+          markerDesc = nameMatch ? `Switch to ${nameMatch[1]} network` : 'Switch network';
+        } else if (/wallet\.confirmTransaction\s*\(/.test(trimmed)) {
+          markerDesc = 'Confirm transaction';
+        }
+
+        if (markerDesc) {
+          stepNum++;
+          // Get the indentation of the current line
+          const indent = line.match(/^(\s*)/)?.[1] || '  ';
+          result.push('');
+          result.push(`${indent}// ========================================`);
+          result.push(`${indent}// STEP ${stepNum}: ${markerDesc}`);
+          result.push(`${indent}// ========================================`);
+        }
+      }
+
+      result.push(line);
+    }
+
+    // Only return modified code if we actually added markers
+    if (stepNum === 0) return code;
+    return result.join('\n');
   }
 
   /**

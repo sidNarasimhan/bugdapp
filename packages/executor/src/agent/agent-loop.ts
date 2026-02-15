@@ -382,3 +382,235 @@ export async function runAgentLoop(
     testSummary,
   };
 }
+
+// ============================================================================
+// Single-step agent — used by hybrid runner when a spec step fails
+// ============================================================================
+
+export interface SingleStepResult {
+  passed: boolean;
+  summary: string;
+  apiCalls: number;
+  costUsd: number;
+  actions: AgentAction[];
+}
+
+/**
+ * Run the agent loop for a single failed step.
+ * The hybrid runner calls this when spec code fails — the agent takes over
+ * for just that step, using the same browser session.
+ *
+ * @param ctx - Agent context (page, wallet, context) from the hybrid runner
+ * @param stepDescription - Human-readable intent (e.g., "Select MetaMask from wallet options")
+ * @param stepCode - The spec code that failed (for context)
+ * @param error - The error that caused the failure
+ * @param dappUrl - The dApp URL
+ * @param completedSteps - Summaries of steps already completed
+ * @param dappContext - Optional per-project dApp context
+ */
+export async function runSingleAgentStep(
+  ctx: AgentContext,
+  stepDescription: string,
+  stepCode: string,
+  error: string,
+  dappUrl: string,
+  completedSteps: string[],
+  dappContext?: string,
+  testGoal?: string,
+  upcomingSteps?: string[],
+): Promise<SingleStepResult> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return { passed: false, summary: 'No ANTHROPIC_API_KEY', apiCalls: 0, costUsd: 0, actions: [] };
+  }
+
+  const model = process.env.AGENT_MODEL || 'claude-haiku-4-5-20251001';
+  const client = new Anthropic({ apiKey });
+  const costTracker = new CostTracker(model);
+  const maxCalls = 15; // Single step shouldn't need many calls
+  let apiCalls = 0;
+  const stepActions: AgentAction[] = [];
+
+  const systemPrompt = buildSystemPrompt(dappContext);
+
+  const tools = ALL_TOOLS.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.input_schema,
+  }));
+
+  // Build initial message with failure context
+  let userMsg = `## Recover Failed Step
+
+A spec-based test step failed. You need to achieve the same goal using the browser.
+
+**Goal**: ${stepDescription}
+**dApp URL**: ${dappUrl}
+`;
+
+  if (testGoal) {
+    userMsg += `**Overall Test Goal**: ${testGoal}\n`;
+  }
+
+  userMsg += `
+### Failed spec code
+\`\`\`typescript
+${stepCode}
+\`\`\`
+
+### Error
+\`\`\`
+${error}
+\`\`\`
+`;
+
+  if (completedSteps.length > 0) {
+    userMsg += `\n### Already Completed Steps (DO NOT undo these)\n`;
+    for (const s of completedSteps) {
+      userMsg += `- ${s}\n`;
+    }
+  }
+
+  if (upcomingSteps && upcomingSteps.length > 0) {
+    userMsg += `\n### Upcoming Steps (what needs to happen AFTER this step)\n`;
+    for (const s of upcomingSteps) {
+      userMsg += `- ${s}\n`;
+    }
+    userMsg += `\nIMPORTANT: If the current step's target element doesn't exist but the page is already in the right state for the NEXT step, mark this step as complete — the UI may have changed since the recording was made.\n`;
+  }
+
+  userMsg += `\nStart by taking a browser_snapshot to see the current page state, then achieve the goal. Call step_complete when done or step_failed if impossible.`;
+
+  const messages: Anthropic.Messages.MessageParam[] = [
+    { role: 'user', content: userMsg },
+  ];
+
+  let stepSignal: ControlSignal | undefined;
+
+  while (!stepSignal && apiCalls < maxCalls) {
+    try {
+      const response = await client.messages.create({
+        model,
+        max_tokens: 4096,
+        system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+        tools: tools as Anthropic.Messages.Tool[],
+        messages,
+      });
+
+      apiCalls++;
+      if (response.usage) {
+        costTracker.recordUsage(response.usage as {
+          input_tokens?: number;
+          output_tokens?: number;
+          cache_read_input_tokens?: number;
+          cache_creation_input_tokens?: number;
+        });
+      }
+
+      if (response.stop_reason === 'end_turn') {
+        messages.push({ role: 'assistant', content: response.content });
+        messages.push({
+          role: 'user',
+          content: 'Please continue. Use browser_snapshot to see the page and call step_complete or step_failed when done.',
+        });
+        continue;
+      }
+
+      if (response.stop_reason !== 'tool_use') break;
+
+      const toolBlocks = response.content.filter(
+        (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use'
+      );
+
+      messages.push({ role: 'assistant', content: response.content });
+
+      const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
+
+      for (const toolBlock of toolBlocks) {
+        const toolInput = toolBlock.input as Record<string, unknown>;
+        const actionStart = Date.now();
+        let result: ToolCallResult;
+
+        if (BROWSER_TOOLS.has(toolBlock.name)) {
+          result = await executeBrowserTool(toolBlock.name, toolInput, ctx);
+        } else if (WALLET_TOOLS.has(toolBlock.name)) {
+          result = await executeWalletTool(toolBlock.name, toolInput, ctx);
+        } else if (CONTROL_TOOLS.has(toolBlock.name)) {
+          result = executeControlTool(toolBlock.name, toolInput);
+        } else {
+          result = { success: false, output: `Unknown tool: ${toolBlock.name}` };
+        }
+
+        console.log(`[Agent:SingleStep] ${toolBlock.name} -> ${result.success ? 'OK' : 'FAIL'}: ${result.output.slice(0, 150)}`);
+
+        // Track action (skip browser_snapshot to reduce noise)
+        if (toolBlock.name !== 'browser_snapshot') {
+          const node = ctx.snapshotRefs.get(toolInput.ref as string);
+          stepActions.push({
+            tool: toolBlock.name,
+            input: {
+              ...(toolInput.ref && { ref: toolInput.ref }),
+              ...(toolInput.description && { description: toolInput.description }),
+              ...(toolInput.text && { text: toolInput.text }),
+              ...(toolInput.url && { url: toolInput.url }),
+              ...(toolInput.key && { key: toolInput.key }),
+              ...(toolInput.expression && { expression: toolInput.expression }),
+              ...(toolInput.name && { name: toolInput.name }),
+            },
+            output: result.output.slice(0, 500),
+            success: result.success,
+            elementRef: toolInput.ref as string | undefined,
+            elementDesc: node ? `${node.role} "${node.name}"` : undefined,
+            durationMs: Date.now() - actionStart,
+          });
+        }
+
+        if (result.controlSignal) {
+          stepSignal = result.controlSignal;
+        }
+
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolBlock.id,
+          content: result.output,
+          is_error: !result.success,
+        });
+      }
+
+      messages.push({ role: 'user', content: toolResults });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes('rate_limit') || message.includes('overloaded')) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        continue;
+      }
+      return {
+        passed: false,
+        summary: `API error: ${message}`,
+        apiCalls,
+        costUsd: costTracker.getUsage().estimatedCostUsd,
+        actions: stepActions,
+      };
+    }
+  }
+
+  const usage = costTracker.getUsage();
+  const passed = stepSignal?.type === 'step_complete' || stepSignal?.type === 'test_complete';
+  const summary = stepSignal?.type === 'step_complete'
+    ? stepSignal.summary
+    : stepSignal?.type === 'step_failed'
+      ? stepSignal.error
+      : stepSignal?.type === 'test_complete'
+        ? stepSignal.summary
+        : 'Step did not complete within limits';
+
+  console.log(`[Agent:SingleStep] ${passed ? 'PASSED' : 'FAILED'}: ${summary} (${apiCalls} calls, ~$${usage.estimatedCostUsd.toFixed(3)}, ${stepActions.length} actions)`);
+
+  return {
+    passed,
+    summary,
+    apiCalls,
+    costUsd: usage.estimatedCostUsd,
+    actions: stepActions,
+  };
+}

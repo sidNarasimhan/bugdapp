@@ -148,9 +148,9 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       # Self-healing: translator needs API key for regeneration
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      SELF_HEAL_MODEL: ${SELF_HEAL_MODEL:-claude-sonnet-4-5-20250929}
+      SELF_HEAL_MODEL: ${SELF_HEAL_MODEL:-claude-haiku-4-5-20251001}
       # Agent mode: model override for AI agent-driven execution
-      AGENT_MODEL: ${AGENT_MODEL:-claude-sonnet-4-5-20250929}
+      AGENT_MODEL: ${AGENT_MODEL:-claude-haiku-4-5-20251001}
     volumes:
       - executor_artifacts:/app/artifacts
     ports:

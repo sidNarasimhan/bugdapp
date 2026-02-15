@@ -249,9 +249,8 @@ function RecordingPipelineCard({
     mutationFn: (mode: ExecutionMode) => {
       if (!spec) throw new Error('No spec');
       const options = {
-        headless: mode === 'headless',
-        streamingMode: mode === 'live' ? 'VNC' as const : mode === 'headed' || mode === 'agent' ? 'VIDEO' as const : 'NONE' as const,
-        ...(mode === 'agent' && { executionMode: 'AGENT' as const }),
+        headless: false,
+        streamingMode: mode === 'live' ? 'VNC' as const : 'NONE' as const,
       };
       return api.createTestRun(spec.id, options);
     },
@@ -351,7 +350,7 @@ function RecordingPipelineCard({
         <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
           {canRun && !isRunning && (
             <button
-              onClick={() => runMutation.mutate('headed')}
+              onClick={() => runMutation.mutate('run')}
               disabled={runMutation.isPending}
               className="flex items-center px-2.5 py-1 text-xs bg-white text-black rounded hover:bg-zinc-200 transition-colors disabled:opacity-50"
             >
@@ -626,7 +625,7 @@ function ExpandedContent({
             View Details
           </Link>
           <button
-            onClick={() => onRun('headed')}
+            onClick={() => onRun('run')}
             disabled={isRunning}
             className="flex items-center px-3 py-1.5 text-xs bg-zinc-800 text-zinc-300 rounded hover:bg-zinc-700 transition-colors disabled:opacity-50"
           >
@@ -678,7 +677,7 @@ function ExpandedContent({
             View Full Details
           </Link>
           <button
-            onClick={() => onRun('headed')}
+            onClick={() => onRun('run')}
             disabled={isRunning}
             className="flex items-center px-3 py-1.5 text-xs bg-zinc-800 text-zinc-300 rounded hover:bg-zinc-700 transition-colors disabled:opacity-50"
           >

@@ -15,3 +15,11 @@ trace-debug/
 # Generated test specs (created at runtime by translator)
 packages/translator/test-*.spec.ts
 packages/translator/avantis-*.spec.ts
+
+# Repeatability test artifacts
+repeatability-test/
+
+# Temp files
+nul
+temp-frame-*.jpg
+*tmp_spec.json

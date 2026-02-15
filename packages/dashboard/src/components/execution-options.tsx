@@ -1,9 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { Bot, Monitor, Play, Video, Zap } from 'lucide-react';
+import { Play, Eye } from 'lucide-react';
 
-export type ExecutionMode = 'headless' | 'headed' | 'live' | 'agent';
+export type ExecutionMode = 'run' | 'live';
 
 interface ExecutionOptionsProps {
   onRun: (mode: ExecutionMode) => void;
@@ -16,36 +16,20 @@ export function ExecutionOptions({
   isRunning = false,
   disabled = false,
 }: ExecutionOptionsProps) {
-  const [selectedMode, setSelectedMode] = useState<ExecutionMode>('headed');
+  const [selectedMode, setSelectedMode] = useState<ExecutionMode>('run');
 
   const modes = [
     {
-      id: 'headless' as const,
-      label: 'Headless',
-      description: 'No UI. Does NOT work with MetaMask tests.',
-      icon: Zap,
-      streamingMode: 'NONE' as const,
-    },
-    {
-      id: 'headed' as const,
-      label: 'Headed',
-      description: 'With browser UI. Good for debugging.',
-      icon: Monitor,
-      streamingMode: 'VIDEO' as const,
+      id: 'run' as const,
+      label: 'Run Test',
+      description: 'Runs in background. Steps fall back to AI if needed.',
+      icon: Play,
     },
     {
       id: 'live' as const,
       label: 'Live View',
-      description: 'Watch test in real-time. Requires Docker.',
-      icon: Video,
-      streamingMode: 'VNC' as const,
-    },
-    {
-      id: 'agent' as const,
-      label: 'AI Agent',
-      description: 'AI drives the browser in real-time. Adapts to UI changes.',
-      icon: Bot,
-      streamingMode: 'VIDEO' as const,
+      description: 'Watch the test run in real-time via VNC.',
+      icon: Eye,
     },
   ];
 
@@ -57,8 +41,6 @@ export function ExecutionOptions({
 
   return (
     <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
-      <h3 className="text-sm font-medium text-white mb-3">Execution Mode</h3>
-
       <div className="space-y-2 mb-4">
         {modes.map((mode) => {
           const Icon = mode.icon;
@@ -112,12 +94,6 @@ export function ExecutionOptions({
         <Play className={`h-4 w-4 mr-2 ${isRunning ? 'animate-pulse' : ''}`} />
         {isRunning ? 'Running...' : 'Run Test'}
       </button>
-
-      {selectedMode === 'live' && (
-        <p className="mt-3 text-xs text-zinc-400 text-center">
-          Live view requires Docker to be running on the server
-        </p>
-      )}
     </div>
   );
 }

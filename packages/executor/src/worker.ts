@@ -1,6 +1,7 @@
 import { Worker, Job, Queue } from 'bullmq';
 import type { PrismaClient as PrismaClientType } from '@prisma/client';
 import { createRunner, type RunResult, type SuiteRunResult } from './runner.js';
+import { runHybrid, type SpecPatch } from './hybrid-runner.js';
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'fs';
 import { join, basename } from 'path';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
@@ -357,7 +358,9 @@ async function processTestRun(job: Job<TestRunJobData>): Promise<void> {
     console.log(`[Worker] Run ${runId} completed: ${result.passed ? 'PASSED' : 'FAILED'} (${result.artifacts.length} artifacts)`);
 
     // HYBRID: if spec failed, launch agent to take over (replaces old self-heal loop)
-    if (!result.passed && run.testSpec?.recording && process.env.ANTHROPIC_API_KEY) {
+    // Skip agent fallback for code bugs — these need a spec fix, not AI retry
+    const isCodeBug = result.error && /ReferenceError|SyntaxError|TypeError|Cannot find module/.test(result.error);
+    if (!result.passed && !isCodeBug && run.testSpec?.recording && process.env.ANTHROPIC_API_KEY) {
       console.log(`[Worker] Spec failed — launching agent fallback for run ${runId}`);
       try {
         const agentQueue = createQueue();
@@ -1000,6 +1003,366 @@ async function processAgentRun(job: Job<AgentRunJobData>): Promise<void> {
 }
 
 /**
+ * Check if a spec has parseable STEP markers for hybrid execution.
+ */
+function hasStepMarkers(code: string): boolean {
+  return /\/\/\s*STEP\s+\d+:/.test(code);
+}
+
+/**
+ * Apply spec patches by replacing step code between STEP markers.
+ * Patches are keyed by step number in the composite (renumbered) spec.
+ */
+function applySpecPatches(specCode: string, patches: SpecPatch[]): string {
+  if (patches.length === 0) return specCode;
+
+  const stepMarkerRegex = /\/\/\s*[═=]{3,}\s*\n\s*\/\/\s*STEP\s+(\d+):\s*(.+)\n\s*\/\/\s*[═=]{3,}/g;
+  const matches = [...specCode.matchAll(stepMarkerRegex)];
+  if (matches.length === 0) return specCode;
+
+  const patchMap = new Map(patches.map(p => [p.stepNumber, p]));
+  let result = specCode;
+
+  // Apply patches in reverse order to preserve indices
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const match = matches[i];
+    const stepNum = parseInt(match[1]);
+    const patch = patchMap.get(stepNum);
+    if (!patch) continue;
+
+    const codeStart = match.index! + match[0].length;
+    const codeEnd = i + 1 < matches.length ? matches[i + 1].index! : undefined;
+
+    // Find the actual end of this step's code (trim trailing whitespace)
+    const afterMarker = result.slice(codeStart, codeEnd);
+    const trimmedLen = afterMarker.trimEnd().length;
+    const actualEnd = codeStart + trimmedLen;
+
+    result = result.slice(0, codeStart) + '\n' + patch.patchedCode + '\n' + result.slice(actualEnd);
+  }
+
+  return result;
+}
+
+/**
+ * For flow tests: patches have renumbered step numbers (composite spec numbering).
+ * Subtract connStepCount to map back to the flow spec's original step numbering,
+ * then apply patches only to the flow spec code.
+ */
+function applyFlowSpecPatches(flowSpecCode: string, patches: SpecPatch[], connStepCount: number): string {
+  // Remap step numbers: composite step 10 with 8 connection steps = flow step 2
+  const flowPatches = patches
+    .filter(p => p.stepNumber > connStepCount)
+    .map(p => ({
+      ...p,
+      stepNumber: p.stepNumber - connStepCount,
+    }));
+
+  if (flowPatches.length === 0) return flowSpecCode;
+  return applySpecPatches(flowSpecCode, flowPatches);
+}
+
+/**
+ * Process a hybrid test run — spec code in-process with per-step agent fallback.
+ * Uses the same browser session for both spec and agent execution.
+ */
+async function processHybridRun(job: Job<TestRunJobData>): Promise<void> {
+  const { runId, streamingMode = 'NONE' } = job.data;
+  const db = await getPrisma();
+
+  console.log(`[Worker] Processing hybrid run: ${runId}`);
+
+  if (await isRunCancelled(runId)) {
+    console.log(`[Worker] Hybrid run ${runId} already cancelled — skipping`);
+    return;
+  }
+
+  const run = await db.testRun.findUnique({
+    where: { id: runId },
+    include: {
+      testSpec: {
+        include: {
+          recording: {
+            include: {
+              project: { select: { seedPhrase: true, dappContext: true, id: true, connectionSpecId: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!run) throw new Error(`Run not found: ${runId}`);
+  if (!run.testSpec) throw new Error(`Test spec not found for run: ${runId}`);
+
+  const seedPhrase = run.testSpec.recording?.project?.seedPhrase;
+  if (!seedPhrase) throw new Error(`No seed phrase for run: ${runId}`);
+
+  // Update status to running
+  await db.testRun.update({
+    where: { id: runId },
+    data: { status: 'RUNNING', startedAt: new Date() },
+  });
+
+  await job.updateProgress(10);
+
+  const artifactsDir = join(ARTIFACTS_BASE_PATH, runId);
+  mkdirSync(artifactsDir, { recursive: true });
+  const isHeadless = streamingMode === 'NONE' && run.headless;
+
+  const recording = run.testSpec.recording;
+  const dappContext = (recording?.project as { dappContext?: string | null })?.dappContext || undefined;
+  const dappUrl = recording?.dappUrl || undefined;
+
+  // For flow tests, prepend connection spec code
+  let specCode = run.testSpec.code;
+  const testType = recording ? (recording as { testType?: string }).testType : null;
+
+  if (testType === 'flow' && recording?.projectId) {
+    const project = await db.project.findUnique({
+      where: { id: recording.projectId },
+      select: { connectionSpecId: true },
+    });
+    const connectionSpecId = (project as { connectionSpecId?: string | null })?.connectionSpecId;
+
+    if (connectionSpecId) {
+      const connectionSpec = await db.testSpec.findUnique({
+        where: { id: connectionSpecId },
+        select: { code: true },
+      });
+
+      if (connectionSpec) {
+        // Build a composite spec: connection steps first, then flow steps
+        specCode = buildCompositeHybridSpec(connectionSpec.code, run.testSpec.code);
+        console.log(`[Worker] Hybrid flow test: prepended connection spec ${connectionSpecId}`);
+      }
+    }
+  }
+
+  let cancelled = false;
+  const stopPoller = startCancelPoller(runId, () => { cancelled = true; });
+
+  try {
+    await job.updateProgress(20);
+
+    const result = await runHybrid(specCode, seedPhrase, {
+      artifactsDir,
+      headless: isHeadless,
+      debug: process.env.DEBUG === 'true',
+      dappContext,
+    }, dappUrl);
+
+    if (cancelled) {
+      console.log(`[Worker] Hybrid run ${runId} was cancelled during execution`);
+      return;
+    }
+
+    await job.updateProgress(80);
+
+    // Save logs
+    const logsPath = join(artifactsDir, 'output.log');
+    writeFileSync(logsPath, result.logs);
+    await uploadToMinio(logsPath, runId, 'logs');
+
+    // Build agent data for dashboard
+    // Always store step data for hybrid runs so dashboard shows step breakdown
+    const agentData = {
+      steps: result.steps.map(s => ({
+        stepId: `step-${s.stepNumber}`,
+        description: s.description,
+        status: s.passed ? 'passed' : 'failed',
+        error: s.error,
+        apiCalls: s.agentApiCalls || 0,
+        durationMs: s.durationMs,
+        actions: [],
+      })),
+      usage: {
+        totalApiCalls: result.totalAgentCalls,
+        estimatedCostUsd: result.totalAgentCostUsd,
+      },
+      model: process.env.AGENT_MODEL || 'claude-haiku-4-5-20251001',
+      mode: 'hybrid',
+    };
+
+    // Update run with results
+    await db.testRun.update({
+      where: { id: runId },
+      data: {
+        status: result.passed ? 'PASSED' : 'FAILED',
+        passed: result.passed,
+        completedAt: new Date(),
+        durationMs: result.durationMs,
+        error: result.error || null,
+        logs: result.logs,
+        executionMode: 'HYBRID',
+        agentData: agentData as any,
+      },
+    });
+
+    // Upload and save artifacts
+    for (const artifact of result.artifacts) {
+      const storagePath = await uploadToMinio(artifact.path, runId, artifact.type);
+      await db.artifact.create({
+        data: {
+          testRunId: runId,
+          type: artifact.type.toUpperCase() as 'SCREENSHOT' | 'VIDEO' | 'TRACE' | 'LOG',
+          name: artifact.name,
+          storagePath: storagePath || artifact.path,
+          stepName: artifact.stepName || null,
+        },
+      });
+    }
+
+    // Self-learning: save spec patches from agent recovery
+    if (result.specPatches?.length > 0) {
+      try {
+        const connStepCount = testType === 'flow'
+          ? (specCode.match(/\/\/\s*STEP\s+\d+:/g) || []).length -
+            (run.testSpec.code.match(/\/\/\s*STEP\s+\d+:/g) || []).length
+          : 0;
+
+        const patchedFlowCode = testType === 'flow'
+          ? applyFlowSpecPatches(run.testSpec.code, result.specPatches, connStepCount)
+          : applySpecPatches(run.testSpec.code, result.specPatches);
+
+        if (patchedFlowCode !== run.testSpec.code) {
+          await db.testSpec.update({
+            where: { id: run.testSpec.id },
+            data: {
+              code: patchedFlowCode,
+              version: { increment: 1 },
+            },
+          });
+          console.log(`[Worker] Self-learning: patched ${result.specPatches.length} step(s) in spec ${run.testSpec.id}`);
+          for (const patch of result.specPatches) {
+            console.log(`[Worker]   Step ${patch.stepNumber}: ${patch.reason}`);
+          }
+        }
+      } catch (patchErr) {
+        console.warn(`[Worker] Failed to save spec patches:`, patchErr instanceof Error ? patchErr.message : patchErr);
+      }
+    }
+
+    // Update test spec status
+    await db.testSpec.update({
+      where: { id: run.testSpec.id },
+      data: { status: 'TESTED' },
+    });
+
+    // Auto-set connectionSpecId if this is a passing connection test
+    if (result.passed && recording) {
+      const recTestType = (recording as { testType?: string }).testType;
+      if (recTestType === 'connection' && recording.projectId) {
+        try {
+          const project = await db.project.findUnique({
+            where: { id: recording.projectId },
+            select: { connectionSpecId: true },
+          });
+          if (!(project as { connectionSpecId?: string | null })?.connectionSpecId) {
+            await db.project.update({
+              where: { id: recording.projectId },
+              data: { connectionSpecId: run.testSpec.id },
+            });
+            console.log(`[Worker] Hybrid: auto-set connectionSpecId for project ${recording.projectId}`);
+          }
+        } catch (err) {
+          console.warn(`[Worker] Hybrid: failed to auto-set connectionSpecId:`, err instanceof Error ? err.message : err);
+        }
+      }
+    }
+
+    await job.updateProgress(100);
+
+    const specSteps = result.steps.filter(s => s.mode === 'spec' && s.passed).length;
+    const agentSteps = result.steps.filter(s => s.mode === 'agent').length;
+    console.log(`[Worker] Hybrid run ${runId} completed: ${result.passed ? 'PASSED' : 'FAILED'} ` +
+      `(${specSteps} spec + ${agentSteps} agent steps, ~$${result.totalAgentCostUsd.toFixed(3)})`);
+
+  } catch (error) {
+    stopPoller();
+
+    if (cancelled) {
+      console.log(`[Worker] Hybrid run ${runId} cancelled — not marking as FAILED`);
+      return;
+    }
+
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    await db.testRun.update({
+      where: { id: runId },
+      data: {
+        status: 'FAILED',
+        passed: false,
+        completedAt: new Date(),
+        error: errorMessage,
+      },
+    });
+
+    console.error(`[Worker] Hybrid run ${runId} failed:`, errorMessage);
+    throw error;
+  } finally {
+    stopPoller();
+  }
+}
+
+/**
+ * Build a composite spec from connection + flow specs for hybrid execution.
+ * Combines step markers from both specs into a single spec.
+ */
+function buildCompositeHybridSpec(connectionCode: string, flowCode: string): string {
+  // Extract bodies from both specs
+  const connBody = extractBody(connectionCode);
+  const flowBody = extractBody(flowCode);
+
+  // Renumber flow steps to continue from connection
+  const connStepCount = (connBody.match(/\/\/\s*STEP\s+\d+:/g) || []).length;
+  const renumberedFlowBody = flowBody.replace(
+    /\/\/\s*STEP\s+(\d+):/g,
+    (_match, num) => `// STEP ${parseInt(num) + connStepCount}:`
+  );
+
+  return [
+    "import { test, expect, raceApprove, raceSign } from '../../fixtures/wallet.fixture'",
+    '',
+    "test('Connection + Flow', async ({ wallet, page }) => {",
+    connBody,
+    '',
+    renumberedFlowBody,
+    '})',
+  ].join('\n');
+}
+
+function extractBody(code: string): string {
+  const lines = code.split('\n');
+  const bodyLines: string[] = [];
+  let inBody = false;
+  let braceDepth = 0;
+
+  for (const line of lines) {
+    if (line.trim().startsWith('import ')) continue;
+
+    if (!inBody && /test\s*\(/.test(line)) {
+      inBody = true;
+      for (const ch of line) {
+        if (ch === '{') braceDepth++;
+        if (ch === '}') braceDepth--;
+      }
+      continue;
+    }
+
+    if (inBody) {
+      for (const ch of line) {
+        if (ch === '{') braceDepth++;
+        if (ch === '}') braceDepth--;
+      }
+      if (braceDepth <= 0) break;
+      bodyLines.push(line);
+    }
+  }
+
+  return bodyLines.join('\n');
+}
+
+/**
  * Start the worker
  */
 export async function startWorker(): Promise<Worker> {
@@ -1017,11 +1380,28 @@ export async function startWorker(): Promise<Worker> {
       if (job.name === 'self-heal') {
         return processSelfHeal(job as Job<SelfHealJobData>);
       }
+      if (job.name === 'execute-hybrid') {
+        return processHybridRun(job as Job<TestRunJobData>);
+      }
+      // Default: check if spec has step markers → hybrid, otherwise subprocess
+      if (job.name === 'execute') {
+        const db = await getPrisma();
+        const run = await db.testRun.findUnique({
+          where: { id: (job.data as TestRunJobData).runId },
+          include: { testSpec: { select: { code: true } } },
+        });
+        if (run?.testSpec?.code && hasStepMarkers(run.testSpec.code)) {
+          console.log(`[Worker] Spec has STEP markers — routing to hybrid mode`);
+          return processHybridRun(job as Job<TestRunJobData>);
+        }
+      }
       return processTestRun(job as Job<TestRunJobData>);
     },
     {
       connection: redisConnection,
       concurrency: parseInt(process.env.WORKER_CONCURRENCY || '1', 10),
+      lockDuration: 300000, // 5 min lock — hybrid runs can take 2-3 min
+      lockRenewTime: 60000, // Renew lock every 60s
       limiter: {
         max: 5,
         duration: 60000, // Max 5 jobs per minute

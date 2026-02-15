@@ -140,16 +140,30 @@ function handleClick(event: MouseEvent): void {
     }
   }
 
-  const selector = generateSelector(actionable);
-  const metadata = getElementMetadata(actionable);
+  // If clicked element has no useful metadata, walk up to find the semantic parent
+  // Toggle switches put role/aria on the container, not the inner knob (span/div)
+  let resolvedElement = actionable;
+  const initialMeta = getElementMetadata(actionable);
+  if (!initialMeta.text && !initialMeta.role && !initialMeta.ariaLabel && !initialMeta.dataTestId) {
+    const parent = actionable.parentElement;
+    if (parent) {
+      const parentMeta = getElementMetadata(parent);
+      if (parentMeta.role || parentMeta.ariaLabel || parentMeta.dataTestId) {
+        resolvedElement = parent;
+      }
+    }
+  }
+
+  const selector = generateSelector(resolvedElement);
+  const metadata = getElementMetadata(resolvedElement);
 
   // Capture DOM context for richer AI understanding
   let parentOuterHTML: string | undefined;
   let nearbyText: string | undefined;
   let headingContext: string | undefined;
   try {
-    parentOuterHTML = getParentOuterHTML(actionable);
-    nearbyText = getNearbyVisibleText(actionable);
+    parentOuterHTML = getParentOuterHTML(resolvedElement);
+    nearbyText = getNearbyVisibleText(resolvedElement);
     headingContext = getCurrentHeadingContext();
   } catch {
     // DOM context capture is best-effort
@@ -170,6 +184,9 @@ function handleClick(event: MouseEvent): void {
       nearbyText,
       pageTitle: document.title,
       headingContext,
+      dataState: metadata.dataState,
+      ariaChecked: metadata.ariaChecked,
+      nearbyLabel: metadata.nearbyLabel,
     },
   });
 }

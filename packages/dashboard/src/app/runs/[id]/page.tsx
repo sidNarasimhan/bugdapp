@@ -143,8 +143,8 @@ export default function RunDetailPage() {
         </div>
       )}
 
-      {/* Agent Details (collapsible) */}
-      {currentRun.executionMode === 'AGENT' && currentRun.agentData && (
+      {/* Agent/Hybrid Step Details (collapsible) */}
+      {(currentRun.executionMode === 'AGENT' || currentRun.executionMode === 'HYBRID') && currentRun.agentData && (
         <AgentDetailsSection
           agentData={currentRun.agentData}
           runId={currentRun.id}
@@ -224,7 +224,8 @@ function AgentDetailsSection({
   runId: string;
   passed?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
+  const isHybrid = agentData.mode === 'hybrid';
 
   return (
     <div className="mb-6">
@@ -237,7 +238,7 @@ function AgentDetailsSection({
         ) : (
           <ChevronRight className="h-4 w-4" />
         )}
-        Agent Details
+        {isHybrid ? 'Step Results' : 'Agent Details'}
       </button>
       {expanded && (
         <AgentReplayTimeline

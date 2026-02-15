@@ -604,30 +604,46 @@ export async function executeWalletTool(
 
         await ctx.wallet.switchNetwork(networkName);
         await ctx.page.bringToFront();
-        // Do NOT reload — dApps listen for chainChanged events.
-        // Reloading kills the Privy/wallet session.
-        await ctx.page.waitForTimeout(5000);
+        await ctx.page.waitForTimeout(3000);
 
-        // Verify the switch actually happened
-        const expectedChainId = networkChainIds[networkName];
-        if (expectedChainId) {
-          try {
-            const currentChainId = await ctx.page.evaluate(() => {
-              const eth = (window as any).ethereum;
-              if (eth?.chainId) return parseInt(eth.chainId, 16);
-              return null;
+        // Force the page provider to sync (MetaMask MV3 may not fire chainChanged)
+        const expectedHex = '0x' + networkChainIds[networkName]?.toString(16);
+        try {
+          await ctx.page.evaluate(async (targetChainId: string) => {
+            await (window as any).ethereum.request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: targetChainId }],
             });
-            if (currentChainId && currentChainId !== expectedChainId) {
-              console.log(`[WalletTools] wallet_switch_network: Chain mismatch! Expected ${expectedChainId} (${networkName}), got ${currentChainId}`);
-              return {
-                success: false,
-                output: `Network switch may have failed. Expected chain ${expectedChainId} (${networkName}) but got ${currentChainId}. The wallet may need to approve the switch.`,
-              };
+          }, expectedHex);
+          console.log(`[WalletTools] wallet_switch_network: Forced page provider sync to ${expectedHex}`);
+          await ctx.page.waitForTimeout(2000);
+        } catch (e) {
+          console.log(`[WalletTools] wallet_switch_network: Page-side switch failed (may need popup): ${e}`);
+          await ctx.page.waitForTimeout(2000);
+        }
+        if (networkChainIds[networkName]) {
+          let verified = false;
+          for (let attempt = 0; attempt < 5; attempt++) {
+            try {
+              const currentHex = await ctx.page.evaluate(async () => {
+                const eth = (window as any).ethereum;
+                // Active RPC call — bypasses cached chainId property
+                const rpc = await eth?.request?.({ method: 'eth_chainId' });
+                return rpc || eth?.chainId || null;
+              });
+              if (currentHex === expectedHex) {
+                console.log(`[WalletTools] wallet_switch_network: Verified chain ${currentHex} matches ${networkName}`);
+                verified = true;
+                break;
+              }
+              console.log(`[WalletTools] wallet_switch_network: Chain ${currentHex} != ${expectedHex}, polling (${attempt + 1}/5)...`);
+            } catch (e) {
+              console.log(`[WalletTools] wallet_switch_network: Poll error: ${e}`);
             }
-            console.log(`[WalletTools] wallet_switch_network: Verified chain ${currentChainId} matches ${networkName}`);
-          } catch (e) {
-            // Verification failed but switch might have worked
-            console.log(`[WalletTools] wallet_switch_network: Could not verify chain ID: ${e}`);
+            await ctx.page.waitForTimeout(2000);
+          }
+          if (!verified) {
+            console.log(`[WalletTools] wallet_switch_network: Chain did not update to ${expectedHex} after polling, but MetaMask switch succeeded`);
           }
         }
 

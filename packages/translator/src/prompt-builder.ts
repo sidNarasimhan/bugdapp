@@ -240,15 +240,24 @@ replace ALL of that with a single \`wallet.switchNetwork()\` call:
 \`\`\`typescript
 // Switch to Base network directly (no popup, no dApp interaction)
 await wallet.switchNetwork('Base')
-// Bring dApp page back to front and wait for it to detect the chain change
-// Do NOT reload — reloading kills the wallet session (Privy, WalletConnect, etc.)
 await page.bringToFront()
-await page.waitForTimeout(5000)
+await page.waitForTimeout(3000)
+// Force the page provider to sync (MetaMask MV3 may not fire chainChanged automatically)
+try {
+  await page.evaluate(async () => {
+    await (window as any).ethereum.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: '0x2105' }],
+    })
+  })
+} catch (e) { /* already on target chain */ }
+await page.waitForTimeout(2000)
 \`\`\`
 
 **CRITICAL**: After \`wallet.switchNetwork()\`, do NOT call \`page.reload()\` — this will
-disconnect the wallet session (Privy, WalletConnect, etc.). The dApp listens for the
-\`chainChanged\` event and will update its UI automatically. Just wait 5 seconds.
+disconnect the wallet session (Privy, WalletConnect, etc.). Instead, call
+\`wallet_switchEthereumChain\` from the page to force the provider to sync with MetaMask.
+The chain ID hex values: Base=0x2105, Arbitrum=0xa4b1, OP=0xa, Polygon=0x89.
 
 **Network names for switchNetwork** (use these exact names):
 - Base: \`'Base'\` or \`'Base Mainnet'\`
@@ -387,14 +396,46 @@ Generate a complete TypeScript file with:
 A test that reports PASS without achieving the actual goal is a **critical bug**. To prevent this:
 - After EVERY significant action (wallet connect, network switch, form submit), add an \`expect()\` that verifies the dApp UI changed as expected
 - For wallet connection: verify the "Login"/"Connect" button is GONE from the dApp UI (not just window.ethereum)
-- For network switch: verify the "Switch to X" button is GONE from the dApp UI
+- For network switch: verify by polling with \`eth_chainId\` RPC call (NOT dApp UI elements — "Switch to X" buttons are dApp-specific and unreliable, and NOT \`window.ethereum.chainId\` which is a cached property that may not update):
+\`\`\`
+let chainId = null
+for (let i = 0; i < 10; i++) {
+  chainId = await page.evaluate(async () => {
+    const eth = (window as any).ethereum
+    return await eth?.request?.({ method: 'eth_chainId' }) || eth?.chainId
+  })
+  if (chainId === '0x2105') break // 0x2105 = Base (8453)
+  await page.waitForTimeout(1000)
+}
+expect(chainId).toBe('0x2105')
+\`\`\`
 - For form submissions: verify a success indicator appeared
 - If a popup/modal/banner blocks an action and you can't dismiss it, the test MUST FAIL — do not silently skip the blocked action
 - Wrap critical actions in try/catch ONLY if you re-throw on failure. Never swallow errors that mean the goal wasn't achieved
 
 Do NOT include any custom MetaMask popup handling functions.
 Do NOT import from '@synthetixio/synpress' or '@tenkeylabs/dappwright' directly.
-Do NOT include any explanation text outside the code. Return only the TypeScript code.`;
+Do NOT include any explanation text outside the code. Return only the TypeScript code.
+
+## CRITICAL: Step Markers for Hybrid Execution
+You MUST wrap each logical step in step marker comments. The test runner uses these to execute
+steps independently and fall back to AI on failure.
+
+Format:
+\`\`\`
+// ========================================
+// STEP N: Brief description of what this step does
+// ========================================
+\`\`\`
+
+Rules:
+- Every page.goto() starts a new step
+- Every raceApprove/raceSign call is its own step
+- Every wallet.switchNetwork() is its own step
+- Every wallet.confirmTransaction() is its own step
+- Group related .click() + .waitForTimeout() + .fill() into the same step
+- expect() verification can be its own step or grouped with the action it verifies
+- Number sequentially starting from 1`;
   }
 
   /**
@@ -585,16 +626,24 @@ Look at the FIRST button clicked in the recording's wallet_connect pattern and v
     }
     if (patternTypes.has('network_switch')) {
       goalVerification += `\n## Goal Verification: Network Switch
-After switching networks, verify the chain changed AND the dApp UI updated:
+After switching networks, verify by polling with \`eth_chainId\` RPC call.
+Do NOT use \`window.ethereum.chainId\` (cached property, may be stale).
+Do NOT check dApp-specific UI elements like "Switch to X" buttons — these are unreliable.
 \`\`\`typescript
-const chainId = await page.evaluate(() => (window as any).ethereum?.chainId)
-// chainId should be a hex string like '0x2105' for Base
-expect(chainId).toBeTruthy()
-
-// Also verify the dApp no longer shows "Switch to [Network]" or "Wrong network" buttons
-// The network switch button/banner should be GONE after successful switch
+// Poll with active RPC call — bypasses cached chainId property
+let chainId = null
+for (let i = 0; i < 10; i++) {
+  chainId = await page.evaluate(async () => {
+    const eth = (window as any).ethereum
+    return await eth?.request?.({ method: 'eth_chainId' }) || eth?.chainId
+  })
+  if (chainId === '0x2105') break // Use the correct hex chain ID for the target network
+  await page.waitForTimeout(1000)
+}
+expect(chainId).toBe('0x2105') // 0x2105 = Base (8453)
 \`\`\`
-**CRITICAL**: Do NOT call page.reload() after wallet.switchNetwork() — this disconnects the wallet session.\n`;
+**CRITICAL**: Do NOT call page.reload() after wallet.switchNetwork() — this disconnects the wallet session.
+**CRITICAL**: Do NOT verify network switch by checking dApp UI buttons (e.g., "Switch to Base"). These are dApp-specific and may remain visible due to rendering delays or hidden overlay elements.\n`;
     }
     if (patternTypes.has('wallet_sign')) {
       goalVerification += `\n## Goal Verification: Signature / SIWE

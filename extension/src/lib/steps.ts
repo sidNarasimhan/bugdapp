@@ -31,6 +31,10 @@ export interface RecordedStep {
     nearbyText?: string;
     pageTitle?: string;
     headingContext?: string;
+    // Toggle/switch metadata
+    dataState?: string;
+    ariaChecked?: string;
+    nearbyLabel?: string;
   };
 
   // Web3 interactions

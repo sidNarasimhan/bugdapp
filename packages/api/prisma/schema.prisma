@@ -146,6 +146,7 @@ enum StreamMode {
 enum ExecutionMode {
   SPEC        // Traditional spec-based execution (Playwright runner)
   AGENT       // AI agent-driven execution (real-time browser control)
+  HYBRID      // Spec code in-process with per-step agent fallback
 }
 
 enum RunStatus {
