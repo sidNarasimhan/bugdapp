@@ -32,6 +32,7 @@ async function buildServer() {
         },
       },
     },
+    bodyLimit: 10 * 1024 * 1024, // 10 MiB (default 1 MiB too small for large recordings)
   });
 
   // Register plugins

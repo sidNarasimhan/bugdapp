@@ -266,8 +266,12 @@ async function processTestRun(job: Job<TestRunJobData>): Promise<void> {
           console.log(`[Worker] Flow test: using connection spec ${connectionSpecId}`);
           result = await runner.runWithConnection(connectionSpec.code, run.testSpec.code, seedPhrase);
         } else {
-          // Connection spec not found, fall back to running as-is
-          console.warn(`[Worker] Connection spec ${connectionSpecId} not found, running flow test as-is`);
+          // Stale reference — clear it so auto-set can fix it on next connection test pass
+          console.warn(`[Worker] Connection spec ${connectionSpecId} not found (stale) — clearing and running as-is`);
+          await db.project.update({
+            where: { id: projectId },
+            data: { connectionSpecId: null },
+          });
           result = await runner.run(run.testSpec.code, undefined, seedPhrase);
         }
       } else {
@@ -339,8 +343,17 @@ async function processTestRun(job: Job<TestRunJobData>): Promise<void> {
             where: { id: recording.projectId },
             select: { connectionSpecId: true },
           });
-          // Only set if not already set (don't override a known-good connection spec)
-          if (!(project as { connectionSpecId?: string | null })?.connectionSpecId) {
+          const existingId = (project as { connectionSpecId?: string | null })?.connectionSpecId;
+          // Update if not set, or if existing spec is stale (deleted)
+          let shouldUpdate = !existingId;
+          if (existingId && existingId !== run.testSpec.id) {
+            const existingSpec = await db.testSpec.findUnique({ where: { id: existingId }, select: { id: true } });
+            if (!existingSpec) {
+              console.log(`[Worker] Existing connectionSpecId ${existingId} is stale (spec deleted) — updating`);
+              shouldUpdate = true;
+            }
+          }
+          if (shouldUpdate) {
             await db.project.update({
               where: { id: recording.projectId },
               data: { connectionSpecId: run.testSpec.id },
@@ -1135,6 +1148,13 @@ async function processHybridRun(job: Job<TestRunJobData>): Promise<void> {
         // Build a composite spec: connection steps first, then flow steps
         specCode = buildCompositeHybridSpec(connectionSpec.code, run.testSpec.code);
         console.log(`[Worker] Hybrid flow test: prepended connection spec ${connectionSpecId}`);
+      } else {
+        // Stale reference — clear it so auto-set can fix it on next connection test pass
+        console.warn(`[Worker] Hybrid flow: connectionSpecId ${connectionSpecId} not found (stale) — clearing`);
+        await db.project.update({
+          where: { id: recording.projectId },
+          data: { connectionSpecId: null },
+        });
       }
     }
   }
@@ -1258,12 +1278,22 @@ async function processHybridRun(job: Job<TestRunJobData>): Promise<void> {
             where: { id: recording.projectId },
             select: { connectionSpecId: true },
           });
-          if (!(project as { connectionSpecId?: string | null })?.connectionSpecId) {
+          const existingId = (project as { connectionSpecId?: string | null })?.connectionSpecId;
+          // Update if not set, or if existing spec is stale (deleted)
+          let shouldUpdate = !existingId;
+          if (existingId && existingId !== run.testSpec.id) {
+            const existingSpec = await db.testSpec.findUnique({ where: { id: existingId }, select: { id: true } });
+            if (!existingSpec) {
+              console.log(`[Worker] Hybrid: existing connectionSpecId ${existingId} is stale (spec deleted) — updating`);
+              shouldUpdate = true;
+            }
+          }
+          if (shouldUpdate) {
             await db.project.update({
               where: { id: recording.projectId },
               data: { connectionSpecId: run.testSpec.id },
             });
-            console.log(`[Worker] Hybrid: auto-set connectionSpecId for project ${recording.projectId}`);
+            console.log(`[Worker] Hybrid: auto-set connectionSpecId for project ${recording.projectId} to ${run.testSpec.id}`);
           }
         } catch (err) {
           console.warn(`[Worker] Hybrid: failed to auto-set connectionSpecId:`, err instanceof Error ? err.message : err);
@@ -1321,7 +1351,7 @@ function buildCompositeHybridSpec(connectionCode: string, flowCode: string): str
   );
 
   return [
-    "import { test, expect, raceApprove, raceSign } from '../../fixtures/wallet.fixture'",
+    "import { test, expect, raceApprove, raceSign, raceConfirmTransaction } from '../../fixtures/wallet.fixture'",
     '',
     "test('Connection + Flow', async ({ wallet, page }) => {",
     connBody,

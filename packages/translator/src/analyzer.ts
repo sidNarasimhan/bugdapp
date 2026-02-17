@@ -281,6 +281,36 @@ export class RecordingAnalyzer {
         });
       }
     }
+
+    // Also detect implicit network switches from eth_chainId result changes
+    let lastChainHex: string | undefined;
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      if (step.type === 'web3' && step.web3Method === 'eth_chainId' && step.web3Result) {
+        const hexResult = typeof step.web3Result === 'string' ? step.web3Result : undefined;
+        if (hexResult) {
+          if (lastChainHex && hexResult !== lastChainHex) {
+            // Chain changed — implicit network switch
+            const chainId = parseInt(hexResult, 16);
+            // Only add if no explicit network_switch pattern already covers this
+            const alreadyDetected = this.patterns.some(
+              (p) => p.type === 'network_switch' && (p.metadata as { chainId?: number })?.chainId === chainId
+            );
+            if (!alreadyDetected) {
+              this.patterns.push({
+                type: 'network_switch',
+                startIndex: i,
+                endIndex: i,
+                steps: [step],
+                confidence: 0.8,
+                metadata: { chainId, implicit: true, fromChain: parseInt(lastChainHex, 16) },
+              });
+            }
+          }
+          lastChainHex = hexResult;
+        }
+      }
+    }
   }
 
   /**

@@ -124,8 +124,9 @@ Therefore the import path is ALWAYS \`../../fixtures/wallet.fixture\` (TWO level
 
 You MUST use this exact import pattern:
 \`\`\`typescript
-import { test, expect } from '../../fixtures/wallet.fixture'
+import { test, expect, raceApprove, raceConfirmTransaction } from '../../fixtures/wallet.fixture'
 \`\`\`
+Import \`raceSign\` too if explicit SIWE is needed.
 
 ### Test body structure:
 \`\`\`typescript
@@ -200,12 +201,14 @@ await raceSign(wallet, page.context(), page)
 // 1. Click the dApp's action button that triggers a transaction
 await page.getByRole('button', { name: /swap|trade|send/i }).click()
 
-// 2. Let dappwright handle the MetaMask transaction popup
-await wallet.confirmTransaction()
+// 2. Race-safe confirm — handles already-open MetaMask popups (MV3 race condition)
+await raceConfirmTransaction(wallet, page.context(), page)
 
 // 3. Verify transaction completed
 await page.waitForTimeout(3000)
 \`\`\`
+**CRITICAL**: ALWAYS use \`raceConfirmTransaction(wallet, page.context(), page)\` instead of \`wallet.confirmTransaction()\`.
+\`wallet.confirmTransaction()\` fails in MV3 because the popup opens before the listener starts.
 
 ### Network Switching:
 The test wallet starts on Ethereum Mainnet. MetaMask v13.17 has **built-in support** for
@@ -290,7 +293,8 @@ await page.waitForTimeout(500)
 - \`raceSign(wallet, page.context(), page)\` - race-safe MetaMask sign (use after clicking dApp sign button)
 - \`wallet.approve()\` - DEPRECATED, do NOT use (MV3 popup bug)
 - \`wallet.sign()\` - DEPRECATED for specs, use \`raceSign()\` instead (same MV3 popup bug)
-- \`wallet.confirmTransaction()\` - confirm a transaction (optionally: \`{ gas, gasLimit, priority }\`)
+- \`raceConfirmTransaction(wallet, page.context(), page)\` - **ALWAYS USE THIS** for transaction confirmation (race-safe)
+- \`wallet.confirmTransaction()\` - DEPRECATED for specs, use \`raceConfirmTransaction()\` instead (same MV3 popup bug)
 - \`wallet.reject()\` - reject any pending request
 - \`wallet.switchNetwork('Network Name')\` - switch to a network (ALWAYS use this for network changes)
 - \`wallet.addNetwork({ networkName, rpc, chainId, symbol })\` - add a custom network (only for non-built-in chains)
@@ -309,14 +313,15 @@ See the SIWE section below for the exact pattern.
 
 ### Chain ID / Network — DO NOT ASSERT CHAIN ID
 - The dappwright wallet ALWAYS starts on Ethereum Mainnet (chain 1).
-- The recording may show \`eth_chainId\` returning a different chain (e.g., 0x2105 for Base). This is what the user's browser had during recording, NOT what the test wallet will have.
 - **DO NOT** generate \`expect(chainId).toBe(...)\` assertions.
-- If the recording contains \`wallet_switchEthereumChain\` or \`wallet_addEthereumChain\`, use \`wallet.addNetwork()\` + \`wallet.switchNetwork()\` directly. Do NOT click network switch buttons.
-- If no explicit network switch appears in the recording steps (no \`wallet_switchEthereumChain\`, \`wallet_addEthereumChain\`, or "Switch to" click), do NOT add any network handling code.
+- If the recording contains \`wallet_switchEthereumChain\` or \`wallet_addEthereumChain\`, use \`wallet.switchNetwork()\` directly. Do NOT click network switch buttons.
+- **DETECT IMPLICIT NETWORK SWITCHES**: If \`eth_chainId\` results CHANGE during the recording (e.g., earlier steps return 0x1 then later steps return 0x2105), this means the user switched networks during recording. You MUST add a \`wallet.switchNetwork()\` call at the point where the chain changes. Map hex chain IDs to network names: 0x2105 = 'Base', 0xa4b1 = 'Arbitrum One', 0xa = 'OP Mainnet', 0x89 = 'Polygon Mainnet'.
+- If no explicit network switch (\`wallet_switchEthereumChain\`) AND no \`eth_chainId\` result change appears, do NOT add network handling code.
 
 ### Duplicate web3 Steps — IGNORE NOISE
-- Recordings often contain many duplicate \`eth_chainId\`, \`eth_accounts\`, and \`eth_requestAccounts\` calls from dApp RPC polling.
-- Only generate code for the FIRST \`eth_requestAccounts\` (wallet connect). Ignore all subsequent \`eth_chainId\` and \`eth_accounts\` calls — they are background noise, not user actions.
+- Recordings contain many duplicate \`eth_chainId\`, \`eth_accounts\`, and \`eth_requestAccounts\` calls from dApp RPC polling.
+- Only generate code for the FIRST \`eth_requestAccounts\` (wallet connect). Ignore duplicate \`eth_accounts\` calls — they are background noise.
+- **EXCEPTION**: If \`eth_chainId\` results change between calls (different hex values), this is NOT noise — it indicates a network switch happened. See the network switch rule above.
 
 ### Test Assertions - VERIFY OUTCOMES
 - After wallet connection, ASSERT using ethereum provider (NOT visual text):
@@ -449,23 +454,28 @@ Rules:
 - Every page.goto() starts a new step
 - Every raceApprove/raceSign call is its own step
 - Every wallet.switchNetwork() is its own step
-- Every wallet.confirmTransaction() is its own step
+- Every raceConfirmTransaction() is its own step
 - Group related .click() + .waitForTimeout() + .fill() into the same step
 - expect() verification can be its own step or grouped with the action it verifies
 - Number sequentially starting from 1
-- **CRITICAL: Each step MUST be self-contained.** Do NOT reference variables (const/let) defined in a previous step. Each step is executed independently by the hybrid runner. If you need to check a locator from a prior step, re-create it inline:
+- **CRITICAL: Each step MUST be self-contained.** Do NOT reference variables (const/let) defined in a previous step. Each step is executed as a SEPARATE function by the hybrid runner — variables from other steps DO NOT EXIST. If you need an element from a prior step, re-query it inline:
   \`\`\`typescript
-  // BAD — loginButton defined in Step 2, referenced in Step 6
+  // BAD — leverageInput defined in Step 2, referenced in Step 5
   // STEP 2:
-  const loginButton = page.locator('...')
-  await loginButton.click()
-  // STEP 6:
-  await expect(loginButton).not.toBeVisible() // ERROR: loginButton not defined!
+  const leverageInput = page.getByTestId('leverage-input').first()
+  await leverageInput.fill('75')
+  // STEP 5:
+  await leverageInput.fill('100') // ERROR: leverageInput is not defined!
 
-  // GOOD — self-contained
-  // STEP 6:
-  await expect(page.locator('button:has-text("Login")')).not.toBeVisible({ timeout: 15000 })
-  \`\`\``;
+  // GOOD — re-query in each step
+  // STEP 2:
+  await page.getByTestId('leverage-input').first().click()
+  await page.getByTestId('leverage-input').first().fill('75')
+  // STEP 5:
+  await page.getByTestId('leverage-input').first().click()
+  await page.getByTestId('leverage-input').first().fill('100')
+  \`\`\`
+  **NEVER use const/let to store locators if they will be referenced in another STEP.** Either inline the locator or define it fresh within the same step.`;
   }
 
   /**
@@ -594,17 +604,20 @@ Do NOT write manual popup detection code — \`raceApprove\` handles it all.\n`;
     }
 
     // Format the recording steps — deduplicate noisy web3 polling calls
-    const seenWeb3Methods = new Set<string>();
+    // but preserve eth_chainId changes (evidence of network switch)
+    const seenWeb3: Map<string, string> = new Map(); // method → last result
     const filteredSteps = recording.steps.filter((step) => {
       if (step.type === 'web3') {
         const method = step.web3Method || '';
-        // Keep first occurrence of actionable methods, deduplicate polling calls
         const pollingMethods = ['eth_chainId', 'eth_accounts', 'eth_blockNumber', 'eth_getBalance', 'eth_call', 'net_version'];
         if (pollingMethods.includes(method)) {
-          if (seenWeb3Methods.has(method)) {
-            return false; // Skip duplicate polling calls
+          const resultStr = JSON.stringify(step.web3Result ?? '');
+          const prevResult = seenWeb3.get(method);
+          if (prevResult !== undefined && prevResult === resultStr) {
+            return false; // Skip duplicate with same result
           }
-          seenWeb3Methods.add(method);
+          // Keep: first occurrence OR result changed (e.g. eth_chainId changed = network switch)
+          seenWeb3.set(method, resultStr);
         }
       }
       return true;
@@ -726,7 +739,7 @@ ${stepsJson}
 
 ## Generation Requirements
 - Target wallet: MetaMask
-- Use dappwright built-in methods: raceApprove(), raceSign(), wallet.confirmTransaction()
+- Use dappwright built-in methods: raceApprove(), raceSign(), raceConfirmTransaction()
 - Import: \`import { test, expect, raceApprove, raceSign } from '../../fixtures/wallet.fixture'\`
 - Generate robust selectors with fallbacks using .or() chains with .first()
 - Prefer: data-testid > getByRole > button:has-text() > original recorded CSS selector
@@ -738,6 +751,7 @@ ${stepsJson}
 - Use expect() assertions to verify wallet connection and signing succeeded
 - If the recording shows Rabby/Coinbase/other wallet, click "MetaMask" instead in the wallet selection modal
 - Handle common obstacles: cookie banners, terms acceptance, welcome modals (dismiss them)
+- **CRITICAL: If the recording contains a click on "Cancel", "Close", "X", "Dismiss", or "Skip" to close a modal/dialog, you MUST include it as an explicit STEP**. These are intentional user actions, not noise. Generate the click with proper .or() selector chains like any other click step
 ${goalVerification}
 Generate a complete, working Playwright/dappwright test spec for this recording.`;
   }

@@ -263,3 +263,80 @@ export async function raceSign(
   await page.waitForTimeout(2000);
   await page.bringToFront();
 }
+
+/**
+ * Race-safe MetaMask transaction confirmation.
+ *
+ * Use this AFTER clicking a dApp button that triggers an on-chain transaction
+ * (e.g., ERC20 approve, swap, place order). Handles the MV3 popup race condition
+ * where the popup opens before wallet.confirmTransaction() starts listening.
+ */
+export async function raceConfirmTransaction(
+  wallet: Dappwright,
+  context: BrowserContext,
+  page: Page,
+): Promise<void> {
+  const findNotifPopup = () => context.pages().find(
+    (p) => { try { return p.url().includes('notification') && !p.isClosed(); } catch { return false; } }
+  );
+
+  const getExtensionId = (): string | null => {
+    const mmPage = context.pages().find(
+      (p) => { try { return p.url().startsWith('chrome-extension://') && !p.url().includes('notification'); } catch { return false; } }
+    );
+    if (!mmPage) return null;
+    try { return new URL(mmPage.url()).hostname; } catch { return null; }
+  };
+
+  const clickConfirmOnPage = async (popup: Page): Promise<void> => {
+    await popup.bringToFront();
+    await popup.waitForLoadState('domcontentloaded').catch(() => {});
+    await popup.waitForTimeout(1500);
+
+    // Scroll down if needed (some tx confirmations have scrollable details)
+    const scrollBtn = popup.getByTestId('confirm-scroll-to-bottom')
+      .or(popup.locator('[data-testid*="scroll"]').first());
+    if (await scrollBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await scrollBtn.click();
+      await popup.waitForTimeout(500);
+    }
+
+    // Click the confirm/approve button
+    const confirmBtn = popup.getByTestId('confirm-footer-button')
+      .or(popup.getByTestId('confirm-btn'))
+      .or(popup.locator('button:has-text("Confirm")').first())
+      .or(popup.locator('button:has-text("Approve")').first());
+    if (await confirmBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await confirmBtn.click();
+      await popup.waitForTimeout(500);
+    }
+
+    // Wait for popup to close
+    if (!popup.isClosed()) {
+      await popup.waitForEvent('close', { timeout: 15000 }).catch(() => {});
+    }
+    if (!popup.isClosed()) {
+      await popup.close().catch(() => {});
+    }
+  };
+
+  // Wait a moment for MetaMask to receive the transaction request
+  await page.waitForTimeout(2000);
+
+  // Check for already-open popup first
+  const popup = findNotifPopup();
+  if (popup) {
+    await clickConfirmOnPage(popup);
+  } else {
+    // No popup yet — open notification.html manually
+    const extId = getExtensionId();
+    if (extId) {
+      const notifPage = await context.newPage();
+      await notifPage.goto(`chrome-extension://${extId}/notification.html`);
+      await clickConfirmOnPage(notifPage);
+    }
+  }
+
+  await page.waitForTimeout(2000);
+  await page.bringToFront();
+}

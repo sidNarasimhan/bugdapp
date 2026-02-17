@@ -30,6 +30,10 @@ let originalReplaceState: typeof history.replaceState | null = null;
 // Track last captured URL to avoid duplicates
 let lastCapturedUrl = '';
 
+// Pointerdown fallback: track pending pointerdown that may not get a click
+let pendingPointerdown: { element: Element; timer: number } | null = null;
+const POINTERDOWN_CLICK_WINDOW_MS = 400;
+
 /**
  * Actionable element types that should capture clicks
  */
@@ -40,7 +44,7 @@ const ACTIONABLE_INPUT_TYPES = ['button', 'submit', 'reset', 'checkbox', 'radio'
 /**
  * Check if an element or its ancestors are actionable
  */
-function findActionableAncestor(element: Element | null, maxDepth = 5): Element | null {
+function findActionableAncestor(element: Element | null, maxDepth = 10): Element | null {
   let current = element;
   let depth = 0;
 
@@ -53,6 +57,11 @@ function findActionableAncestor(element: Element | null, maxDepth = 5): Element 
     // Check role attribute
     const role = current.getAttribute('role');
     if (role && ACTIONABLE_ROLES.includes(role)) {
+      return current;
+    }
+
+    // Check for data-testid (always actionable — devs only put testids on interactive elements)
+    if (current.hasAttribute('data-testid')) {
       return current;
     }
 
@@ -124,6 +133,12 @@ function captureStep(step: Omit<RecordedStep, 'id' | 'timestamp'>): void {
 function handleClick(event: MouseEvent): void {
   if (!isCapturing) return;
 
+  // Clear pending pointerdown — click fired normally, so pointerdown fallback not needed
+  if (pendingPointerdown) {
+    clearTimeout(pendingPointerdown.timer);
+    pendingPointerdown = null;
+  }
+
   const target = event.target as Element;
   const actionable = findActionableAncestor(target);
 
@@ -140,8 +155,15 @@ function handleClick(event: MouseEvent): void {
     }
   }
 
+  captureClickOnElement(actionable);
+}
+
+/**
+ * Capture a click on a resolved actionable element.
+ * Shared by both the click handler and pointerdown fallback.
+ */
+function captureClickOnElement(actionable: Element): void {
   // If clicked element has no useful metadata, walk up to find the semantic parent
-  // Toggle switches put role/aria on the container, not the inner knob (span/div)
   let resolvedElement = actionable;
   const initialMeta = getElementMetadata(actionable);
   if (!initialMeta.text && !initialMeta.role && !initialMeta.ariaLabel && !initialMeta.dataTestId) {
@@ -157,7 +179,6 @@ function handleClick(event: MouseEvent): void {
   const selector = generateSelector(resolvedElement);
   const metadata = getElementMetadata(resolvedElement);
 
-  // Capture DOM context for richer AI understanding
   let parentOuterHTML: string | undefined;
   let nearbyText: string | undefined;
   let headingContext: string | undefined;
@@ -189,6 +210,42 @@ function handleClick(event: MouseEvent): void {
       nearbyLabel: metadata.nearbyLabel,
     },
   });
+}
+
+/**
+ * Handle pointerdown events — fallback for elements that get removed from DOM
+ * before click fires (e.g., modal confirm buttons that close on pointerdown).
+ */
+function handlePointerDown(event: PointerEvent): void {
+  if (!isCapturing) return;
+
+  const target = event.target as Element;
+  const actionable = findActionableAncestor(target);
+
+  if (!actionable) return;
+
+  // For text inputs, skip — handled by input event
+  if (actionable.tagName === 'INPUT') {
+    const input = actionable as HTMLInputElement;
+    if (!ACTIONABLE_INPUT_TYPES.includes(input.type)) return;
+  }
+
+  // Clear any previous pending pointerdown
+  if (pendingPointerdown) {
+    clearTimeout(pendingPointerdown.timer);
+  }
+
+  // Store a snapshot — if click fires within the window, it will clear this.
+  // If click never fires (element removed from DOM), the timer captures it.
+  const timer = window.setTimeout(() => {
+    if (pendingPointerdown?.element === actionable) {
+      console.log('Pointerdown fallback: click never fired, capturing via pointerdown');
+      captureClickOnElement(actionable);
+      pendingPointerdown = null;
+    }
+  }, POINTERDOWN_CLICK_WINDOW_MS);
+
+  pendingPointerdown = { element: actionable, timer };
 }
 
 /**
@@ -340,6 +397,7 @@ export function initEventCapture(sessionId: string): void {
 
   // Add event listeners (capture phase for clicks to catch all)
   document.addEventListener('click', handleClick, true);
+  document.addEventListener('pointerdown', handlePointerDown, true);
   document.addEventListener('input', handleInput, true);
   document.addEventListener('blur', handleBlur, true);
 
@@ -370,8 +428,15 @@ export function stopEventCapture(): void {
 
   // Remove event listeners
   document.removeEventListener('click', handleClick, true);
+  document.removeEventListener('pointerdown', handlePointerDown, true);
   document.removeEventListener('input', handleInput, true);
   document.removeEventListener('blur', handleBlur, true);
+
+  // Clear pending pointerdown
+  if (pendingPointerdown) {
+    clearTimeout(pendingPointerdown.timer);
+    pendingPointerdown = null;
+  }
 
   // Restore History API methods
   if (originalPushState) {

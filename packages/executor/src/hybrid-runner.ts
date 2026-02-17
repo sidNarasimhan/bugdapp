@@ -19,7 +19,7 @@ import { expect } from '@playwright/test';
 import { mkdirSync, existsSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
-import { raceApprove, raceSign } from './wallet-helpers.js';
+import { raceApprove, raceSign, raceConfirmTransaction } from './wallet-helpers.js';
 import { runSingleAgentStep } from './agent/agent-loop.js';
 import type { AgentContext, AgentAction } from './agent/types.js';
 
@@ -250,7 +250,7 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 /**
  * Execute a single step's code in the browser context.
  * The code runs as an async function with page, wallet, context,
- * expect, raceApprove, and raceSign in scope.
+ * expect, raceApprove, raceSign, and raceConfirmTransaction in scope.
  */
 async function executeStepCode(
   code: string,
@@ -261,11 +261,11 @@ async function executeStepCode(
   const jsCode = stripTypeAnnotations(code);
 
   const fn = new AsyncFunction(
-    'page', 'wallet', 'context', 'expect', 'raceApprove', 'raceSign',
+    'page', 'wallet', 'context', 'expect', 'raceApprove', 'raceSign', 'raceConfirmTransaction',
     jsCode,
   );
 
-  await fn(page, wallet, context, expect, raceApprove, raceSign);
+  await fn(page, wallet, context, expect, raceApprove, raceSign, raceConfirmTransaction);
 }
 
 // ============================================================================
