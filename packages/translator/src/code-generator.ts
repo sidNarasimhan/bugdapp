@@ -46,6 +46,14 @@ export class CodeGenerator {
           return { base64, mediaType: 'image/png' as const };
         });
 
+      // Append success state screenshot if available
+      const successState = (analysis.recording as unknown as { successState?: { markedSnapshot?: { screenshot?: string }; stopSnapshot?: { screenshot?: string } } }).successState;
+      const successScreenshot = successState?.markedSnapshot?.screenshot || successState?.stopSnapshot?.screenshot;
+      if (successScreenshot) {
+        const base64 = successScreenshot.replace(/^data:image\/\w+;base64,/, '');
+        stepScreenshots.push({ base64, mediaType: 'image/png' as const });
+      }
+
       let code: string;
       if (stepScreenshots.length > 0) {
         const response = await this.client.generateCodeWithImages({
@@ -155,6 +163,11 @@ export class CodeGenerator {
         }
       );
     }
+
+    // Strip dynamic Radix/HeadlessUI IDs from selectors — they change every page load
+    // e.g., div#radix-\:r4h\: > div:nth-child(3) p:nth-child(1) → useless
+    // Remove entire .or(page.locator('...radix...')) calls to avoid syntax errors
+    processed = processed.replace(/\s*\.or\(page\.locator\(['"][^'"]*#radix-[^'"]*['"]\)\)/g, '');
 
     // Ensure step markers are present for hybrid execution
     processed = this.addStepMarkers(processed);

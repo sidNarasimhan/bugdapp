@@ -91,6 +91,20 @@ export const ConsoleLogEntrySchema = z.object({
   timestamp: z.number(),
 });
 
+export const SuccessSnapshotSchema = z.object({
+  visibleText: z.array(z.string()).default([]),
+  url: z.string().default(''),
+  pageTitle: z.string().default(''),
+  screenshot: z.string().optional(),
+  timestamp: z.number().default(0),
+});
+
+export const SuccessStateSchema = z.object({
+  markedSnapshot: SuccessSnapshotSchema.optional(),
+  stopSnapshot: SuccessSnapshotSchema.optional(),
+  semanticGoal: z.string().optional(),
+});
+
 export const RecordingSchema = z.object({
   name: z.string(),
   startUrl: z.string(),
@@ -101,6 +115,8 @@ export const RecordingSchema = z.object({
   walletAddress: z.string().nullable().optional(),
   // Console logs captured during recording
   consoleLogs: z.array(ConsoleLogEntrySchema).optional(),
+  // Success state captured for verification assertions
+  successState: SuccessStateSchema.optional(),
   metadata: z.object({
     browser: z.string().optional(),
     extensionVersion: z.string().optional(),
@@ -115,6 +131,8 @@ export type NavigationStep = z.infer<typeof NavigationStepSchema>;
 export type Web3Step = z.infer<typeof Web3StepSchema>;
 export type ScrollStep = z.infer<typeof ScrollStepSchema>;
 export type RecordingStep = z.infer<typeof RecordingStepSchema>;
+export type SuccessSnapshot = z.infer<typeof SuccessSnapshotSchema>;
+export type SuccessState = z.infer<typeof SuccessStateSchema>;
 export type Recording = z.infer<typeof RecordingSchema>;
 
 // ============================================================================

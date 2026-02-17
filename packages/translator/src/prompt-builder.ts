@@ -1,4 +1,4 @@
-import type { AnalysisResult, Recording, GenerationOptions, NetworkConfig, FailureContext } from './types.js';
+import type { AnalysisResult, Recording, GenerationOptions, NetworkConfig, FailureContext, SuccessState } from './types.js';
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -358,8 +358,14 @@ You MUST use selectors in this EXACT priority order. Do NOT vary the approach be
 1. \`dataTestId\` → use \`page.getByTestId('value')\`
 2. \`ariaLabel\` → use \`page.getByLabel('value')\`
 3. \`role\` + \`text\` → use \`page.getByRole('role', { name: /text/i })\`
-4. \`text\` on a button → use \`page.locator('button:has-text("text")')\`
-5. \`selector\` (recorded CSS) → use \`page.locator('recorded-selector')\`
+4. \`text\` → check the recorded CSS selector or \`tagName\` metadata for the element's tag, then use that tag as a prefix:
+   - If \`tagName\` is "BUTTON" or selector contains \`button\` → \`page.locator('button:has-text("text")')\`
+   - If selector shows \`p:nth-child\` or \`tagName\` is "P" → \`page.locator('p:has-text("text")')\`
+   - If selector shows \`span\` or \`tagName\` is "SPAN" → \`page.locator('span:has-text("text")')\`
+   - If selector shows \`a\` or \`tagName\` is "A" → \`page.locator('a:has-text("text")')\`
+   - If unclear → use \`page.getByRole('button', { name: /text/i })\` as primary, then \`page.locator(':has-text("text")').last()\` as fallback
+   **CRITICAL for clicking**: NEVER use bare \`:has-text("text")\` without a tag prefix for .click() — it matches \<html\> and \<body\> which are always first in DOM order, so .first() gives the wrong element. Always prefix with the actual tag.
+5. \`selector\` (recorded CSS) → use \`page.locator('recorded-selector')\` — but see Dynamic ID rule below
 
 **Step 2: Build the .or() chain** using ONLY the selectors that exist in the metadata.
 Do NOT invent selectors that aren't in the recording data. The chain should be:
@@ -375,22 +381,39 @@ await page.getByTestId('connect-btn')
 
 **RULES:**
 - ALWAYS add \`.first()\` after \`.or()\` chains
-- ALWAYS include the recorded CSS selector as the LAST \`.or()\` fallback
+- ALWAYS include the recorded CSS selector as the LAST \`.or()\` fallback (unless it contains a dynamic ID — see below)
 - Use case-insensitive regex for role names: \`{ name: /text/i }\`
-- Do NOT use \`page.getByText()\` — it matches parent containers. Use \`button:has-text()\` or \`getByRole\` instead
+- Do NOT use \`page.getByText()\` for CLICKING — it matches parent containers. Use \`:has-text()\` or \`getByRole\` instead. For VERIFICATION assertions (expect().toBeVisible()), \`page.getByText()\` is fine
 - For input fields: prefer \`getByTestId\` > \`getByLabel\` > \`getByRole('textbox')\` > recorded CSS
 - Do NOT use \`nth-child\` or positional selectors unless the recording's CSS selector uses them
 
+**Dynamic IDs — ALWAYS strip these from CSS selectors:**
+- Radix UI IDs: \`#radix-\\:r..\\:\`, \`[id^="radix-"]\` — these change every page load
+- HeadlessUI IDs: \`#headlessui-...\` — these change every page load
+- React-generated IDs: \`#react-aria-...\`, \`#:r..:\` — these change every page load
+If the recorded CSS selector is ONLY a dynamic ID path (e.g., \`div#radix-\\:r4h\\: > div:nth-child(3) p:nth-child(1)\`), do NOT use it as a fallback. Instead, rely on text-based selectors (\`:has-text()\`, \`getByRole\`, \`getByTestId\`). Only use CSS selectors that contain stable class names, data attributes, or tag structure.
+
+**Tag-aware selectors (for CLICKING):**
+- \`button:has-text("X")\` — when the element IS a button
+- \`p:has-text("X")\` — when the element IS a \`<p>\` tag
+- \`span:has-text("X")\` — when the element IS a \`<span>\` tag
+- \`a:has-text("X")\` — when the element IS a link
+- NEVER use bare \`:has-text("X")\` for .click() — it matches \<html\>/\<body\> and .first() gives the wrong element
+- When tag is unknown, use \`page.getByText('X', { exact: false }).first()\` for clicking (targets the tightest element)
+
 ### Verifying Click Effects (Prevent False Positives)
-**.or().first() chains can match the WRONG element silently.** After important clicks that should open a menu/modal/dropdown, ALWAYS verify the expected result appeared:
+**.or().first() chains can match the WRONG element silently.** After important clicks that should open a menu/modal/dropdown, verify the expected result appeared by checking that the **NEXT step's target element** is visible:
 \`\`\`typescript
-// Click profile menu icon
+// Click close position trigger (opens modal)
 await page.locator('...').or(...).first().click()
 await page.waitForTimeout(1000)
-// VERIFY the menu actually opened before proceeding
-await expect(page.locator('button:has-text("Edit")')).toBeVisible({ timeout: 5000 })
+// VERIFY the modal opened by checking the NEXT step's target is visible
+// Use page.getByText() for verification — it targets the tightest element
+await expect(page.getByText('Close & Collect', { exact: false }).first()).toBeVisible({ timeout: 5000 })
+// Then click it with the correct tag prefix from the recording
+await page.locator('p:has-text("Close & Collect")').first().click()
 \`\`\`
-If the click step is supposed to open a menu, modal, or dialog — add an \`expect().toBeVisible()\` or \`waitFor({ state: 'visible' })\` check for the NEXT step's target element BEFORE trying to click it. This catches wrong-element clicks early instead of cascading into a false positive.
+**CRITICAL**: Do NOT invent modal titles or dialog text for verification. Only use text that appears in the recording's step metadata (text, ariaLabel) or in the success state captured text. If you need to verify a modal opened, check that the NEXT step's target element is visible — that IS the verification.
 
 ### Wallet Mapping
 - The recording may use Rabby, Coinbase Wallet, or other wallets
@@ -730,13 +753,16 @@ await expect(page.locator('text=Sidharth')).toBeVisible({ timeout: 10000 })
 \`\`\`\n`;
     }
 
+    // Build success state section if available
+    const successStateSection = this.buildSuccessStateSection();
+
     return `${context}
 ${exampleSection}
 ## Recording Steps (JSON)
 \`\`\`json
 ${stepsJson}
 \`\`\`
-
+${successStateSection}
 ## Generation Requirements
 - Target wallet: MetaMask
 - Use dappwright built-in methods: raceApprove(), raceSign(), raceConfirmTransaction()
@@ -744,7 +770,7 @@ ${stepsJson}
 - Generate robust selectors with fallbacks using .or() chains with .first()
 - Prefer: data-testid > getByRole > button:has-text() > original recorded CSS selector
 - **CRITICAL: Each step has a \`selector\` field — ALWAYS include it as the LAST .or() fallback**
-- Do NOT use page.getByText() for clicking — use page.locator('button:has-text(...)') or page.getByRole('button') instead
+- Do NOT use page.getByText() for CLICKING — use page.locator(':has-text(...)') or page.getByRole('button') instead. However, page.getByText() IS correct for verification assertions (expect().toBeVisible())
 - **CRITICAL: Do NOT invent verification steps beyond what the recording captured** — if the recording ends at a button click, end the test there
 - Add appropriate waits after wallet interactions
 - Handle conditional UI states (modals that may or may not appear)
@@ -754,6 +780,80 @@ ${stepsJson}
 - **CRITICAL: If the recording contains a click on "Cancel", "Close", "X", "Dismiss", or "Skip" to close a modal/dialog, you MUST include it as an explicit STEP**. These are intentional user actions, not noise. Generate the click with proper .or() selector chains like any other click step
 ${goalVerification}
 Generate a complete, working Playwright/dappwright test spec for this recording.`;
+  }
+
+  /**
+   * Build the success state section for the prompt when successState is available
+   */
+  private buildSuccessStateSection(): string {
+    const successState = (this.analysis.recording as unknown as { successState?: SuccessState }).successState;
+    if (!successState) return '';
+
+    let section = `\n## Success State (CAPTURED FROM RECORDING)\n`;
+
+    if (successState.semanticGoal) {
+      section += `### User-defined Success Goal\n"${successState.semanticGoal}"\n\n`;
+    }
+
+    // Use markedSnapshot preferentially, fall back to stopSnapshot
+    const snapshot = successState.markedSnapshot || successState.stopSnapshot;
+    if (snapshot) {
+      section += `### Captured Page State at Success\n`;
+      if (snapshot.url) section += `- URL: ${snapshot.url}\n`;
+      if (snapshot.pageTitle) section += `- Page Title: ${snapshot.pageTitle}\n`;
+      if (snapshot.visibleText && snapshot.visibleText.length > 0) {
+        section += `- Visible Text:\n`;
+        for (const text of snapshot.visibleText) {
+          section += `  - "${text}"\n`;
+        }
+      }
+      section += `\n`;
+    }
+
+    // Build concrete examples from the actual captured text
+    let exampleAssertions = '';
+    if (snapshot && snapshot.visibleText && snapshot.visibleText.length > 0) {
+      // Pick 2-3 short distinctive items for the example
+      const distinctive = snapshot.visibleText.filter(t => t.length >= 3 && t.length <= 30);
+      const examples = distinctive.slice(0, 3);
+      if (examples.length > 0) {
+        exampleAssertions = `\n**Example assertions using the captured text above:**
+\`\`\`typescript
+// STEP N: Verify success state
+// Use page.getByText() for verification — it targets the tightest element containing the text
+${examples.map(t => `await expect(page.getByText('${t}', { exact: false }).first()).toBeVisible({ timeout: 10000 })`).join('\n')}
+\`\`\`\n`;
+      }
+    }
+
+    section += `### Verification Rules (OVERRIDE — success state was captured)
+**CRITICAL**: When success state is provided, the rule "Only Verify What Was Recorded" is OVERRIDDEN.
+You MUST add a final verification step using the captured success data below.
+
+- The LAST STEP of the test MUST be a verification step using text from the captured visible text list
+- Use EXACT text from the visible text list — do NOT invent or guess text
+- Generate 2-3 expect() assertions using page.getByText('text', { exact: false }).first() — NOT :has-text() which matches \<body\>
+- Use toBeVisible() or not.toBeVisible() with timeout: 10000
+
+**CRITICAL: Interpret the semantic goal to determine assertion direction.**
+The semantic goal is: "${successState.semanticGoal || 'verify success'}"
+- If the goal implies something was CREATED/OPENED/ADDED (e.g., "position opened", "order placed", "account created"), use **toBeVisible()** — assert that the result text IS visible
+- If the goal implies something was REMOVED/CLOSED/DELETED (e.g., "position closed", "order cancelled", "removed"):
+  - Do NOT use not.toBeVisible() on short/generic text like "Long", "Short", "100x", amounts, or single words — these likely appear in OTHER parts of the UI (e.g., Long/Short trade direction toggle, leverage selector) and will always be visible regardless of position state
+  - Instead, verify the CLOSE/DELETE action completed by checking that the ACTION MODAL CLOSED. After raceConfirmTransaction(), the confirmation modal (e.g., "Close & Collect") should disappear — assert that text from the modal is not.toBeVisible()
+  - Then verify the page settled back to its normal state with a wait
+  - Example for a position close:
+    \`\`\`typescript
+    // Verify the close modal has closed (transaction completed and processed)
+    await expect(page.getByText('Close & Collect', { exact: false }).first()).not.toBeVisible({ timeout: 15000 })
+    // Verify the page has settled and positions section is visible
+    await expect(page.getByText('Current Positions', { exact: false }).first()).toBeVisible({ timeout: 10000 })
+    \`\`\`
+- Read the semantic goal carefully and reason about what the user expects to see (or not see) after the action completes
+${exampleAssertions}
+`;
+
+    return section;
   }
 
   /**
@@ -859,7 +959,7 @@ These are the exact CSS selectors captured during recording. Use them as fallbac
 ${recordingSteps}
 
 **CRITICAL: Always include the original recorded selector as the LAST .or() fallback.**
-Do NOT use page.getByText() for clicking — it matches parent containers. Use page.locator('button:has-text(...)') or getByRole instead.
+Do NOT use page.getByText() for CLICKING — it matches parent containers. Use page.locator(':has-text(...)') or getByRole instead.
 
 ## Previous Failed Spec
 \`\`\`typescript

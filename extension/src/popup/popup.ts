@@ -32,6 +32,9 @@ let errorMessage: HTMLElement;
 let recordingControls: HTMLElement;
 let settingsLink: HTMLElement;
 let projectSelect: HTMLSelectElement;
+let markSuccessBtn: HTMLButtonElement;
+let successMarkedIndicator: HTMLElement;
+let successGoalTextarea: HTMLTextAreaElement;
 let apiAvailable = false;
 
 // Step type icons
@@ -61,6 +64,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   recordingControls = document.getElementById('recording-controls')!;
   settingsLink = document.getElementById('settings-link')!;
   projectSelect = document.getElementById('project-select') as HTMLSelectElement;
+  markSuccessBtn = document.getElementById('mark-success-btn') as HTMLButtonElement;
+  successMarkedIndicator = document.getElementById('success-marked-indicator')!;
+  successGoalTextarea = document.getElementById('success-goal') as HTMLTextAreaElement;
 
   // Create upload button if not exists
   uploadBtn = document.getElementById('upload-btn') as HTMLButtonElement;
@@ -80,6 +86,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   discardBtn.addEventListener('click', handleDiscard);
   testNameInput.addEventListener('input', validateSaveButton);
   settingsLink?.addEventListener('click', openSettings);
+  markSuccessBtn?.addEventListener('click', handleMarkSuccess);
 
   // Check if API is available
   checkApiAvailability();
@@ -154,6 +161,12 @@ async function loadState() {
       walletConnected = state.walletConnected || false;
       walletAddress = state.walletAddress || null;
       updateRecordingUI();
+
+      // Show success indicator if already marked
+      if (response.hasMarkedSuccess && markSuccessBtn && successMarkedIndicator) {
+        markSuccessBtn.classList.add('hidden');
+        successMarkedIndicator.classList.remove('hidden');
+      }
     } else if (response.hasSteps) {
       // Not recording but has steps - show preview
       const stepsResponse = await chrome.runtime.sendMessage({ type: 'GET_RECORDED_STEPS' });
@@ -248,6 +261,13 @@ function updateRecordingUI() {
   currentUrlEl.textContent = truncateUrl(startUrl);
   stepCountEl.textContent = '0';
 
+  // Show Mark Success button, hide indicator
+  if (markSuccessBtn) {
+    markSuccessBtn.classList.remove('hidden');
+    markSuccessBtn.disabled = false;
+  }
+  if (successMarkedIndicator) successMarkedIndicator.classList.add('hidden');
+
   // Poll for step count updates
   startStepCountPolling();
 }
@@ -266,6 +286,10 @@ function updateIdleUI() {
   statusIndicator.classList.remove('recording');
   statusText.textContent = 'Ready to record';
   recordingInfo.classList.add('hidden');
+
+  // Hide Mark Success button
+  if (markSuccessBtn) markSuccessBtn.classList.add('hidden');
+  if (successMarkedIndicator) successMarkedIndicator.classList.add('hidden');
 
   // Stop polling
   stopStepCountPolling();
@@ -393,6 +417,25 @@ async function handleSave() {
       // No console logs available
     }
 
+    // Fetch success state for export
+    let exportSuccessState: Record<string, unknown> | undefined;
+    try {
+      const ssResponse = await chrome.runtime.sendMessage({
+        type: 'GET_SUCCESS_STATE',
+        timestamp: Date.now(),
+      });
+      if (ssResponse?.success && ssResponse.successState) {
+        exportSuccessState = { ...ssResponse.successState };
+      }
+    } catch {
+      // No success state available
+    }
+    const semanticGoal = successGoalTextarea?.value?.trim();
+    if (semanticGoal) {
+      exportSuccessState = exportSuccessState || {};
+      exportSuccessState.semanticGoal = semanticGoal;
+    }
+
     const testData = {
       name,
       startUrl,
@@ -401,6 +444,7 @@ async function handleSave() {
       walletConnected,
       walletAddress,
       consoleLogs,
+      ...(exportSuccessState ? { successState: exportSuccessState } : {}),
       exportedAt: new Date().toISOString(),
     };
 
@@ -451,6 +495,27 @@ async function handleUpload() {
   try {
     const selectedProjectId = projectSelect?.value || undefined;
 
+    // Fetch success state from storage and merge in semantic goal
+    let successState: Record<string, unknown> | undefined;
+    try {
+      const ssResponse = await chrome.runtime.sendMessage({
+        type: 'GET_SUCCESS_STATE',
+        timestamp: Date.now(),
+      });
+      if (ssResponse?.success && ssResponse.successState) {
+        successState = { ...ssResponse.successState };
+      }
+    } catch {
+      // No success state available
+    }
+
+    // Add semantic goal from textarea
+    const semanticGoal = successGoalTextarea?.value?.trim();
+    if (semanticGoal) {
+      successState = successState || {};
+      successState.semanticGoal = semanticGoal;
+    }
+
     const result = await uploadRecording(
       name,
       startUrl,
@@ -461,7 +526,8 @@ async function handleUpload() {
         walletConnected,
         walletAddress,
       },
-      { autoGenerate: true, projectId: selectedProjectId }
+      { autoGenerate: true, projectId: selectedProjectId },
+      successState
     );
 
     if (result.success) {
@@ -506,6 +572,37 @@ async function handleDiscard() {
   await chrome.runtime.sendMessage({ type: 'CLEAR_RECORDING' });
   recordedSteps = [];
   updateIdleUI();
+}
+
+/**
+ * Handle "Mark Success" button click — captures current page state as success snapshot
+ */
+async function handleMarkSuccess() {
+  if (!markSuccessBtn) return;
+
+  markSuccessBtn.disabled = true;
+  markSuccessBtn.textContent = 'Capturing...';
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'CAPTURE_SUCCESS_STATE',
+      timestamp: Date.now(),
+    });
+
+    if (response?.success) {
+      markSuccessBtn.classList.add('hidden');
+      if (successMarkedIndicator) successMarkedIndicator.classList.remove('hidden');
+    } else {
+      showError(response?.error || 'Failed to capture success state');
+      markSuccessBtn.disabled = false;
+    }
+  } catch (error) {
+    console.error('Failed to mark success:', error);
+    showError('Failed to capture success state');
+    markSuccessBtn.disabled = false;
+  } finally {
+    markSuccessBtn.textContent = 'Mark as Success';
+  }
 }
 
 /**

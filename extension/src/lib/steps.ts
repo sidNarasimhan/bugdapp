@@ -70,3 +70,21 @@ export interface RecordedTest {
   createdAt: Date;
   duration: number;
 }
+
+// ============================================================================
+// Success State Types — Captured page state for verification assertions
+// ============================================================================
+
+export interface SuccessSnapshot {
+  visibleText: string[];   // Key text visible in viewport (max 50 items)
+  url: string;
+  pageTitle: string;
+  screenshot?: string;     // Base64 PNG from captureVisibleTab
+  timestamp: number;
+}
+
+export interface SuccessState {
+  markedSnapshot?: SuccessSnapshot;  // User pressed "Mark Success"
+  stopSnapshot?: SuccessSnapshot;    // Auto-captured on Stop
+  semanticGoal?: string;             // "Verify position opened"
+}

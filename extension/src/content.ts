@@ -5,7 +5,7 @@
 
 import type { ExtensionMessage, RecordedStep } from './types';
 import { initWeb3Detection, stopWeb3Detection } from './lib/web3-detector';
-import { initEventCapture, stopEventCapture } from './lib/event-capture';
+import { initEventCapture, stopEventCapture, capturePageState } from './lib/event-capture';
 
 console.log('Web3 Test Recorder: Content script loaded on', window.location.href);
 
@@ -187,6 +187,16 @@ function handleMessage(
     case 'STOP_RECORDING_TAB':
       stopRecording();
       sendResponse({ success: true });
+      break;
+
+    case 'CAPTURE_PAGE_STATE':
+      try {
+        const pageState = capturePageState();
+        sendResponse({ success: true, pageState });
+      } catch (error) {
+        console.warn('[Content] Failed to capture page state:', error);
+        sendResponse({ success: false, error: 'Failed to capture page state' });
+      }
       break;
 
     default:

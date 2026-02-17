@@ -27,6 +27,8 @@
       <div id="recording-info" class="hidden">
         <p>Recording on: <span id="current-url"></span></p>
         <p>Steps: <span id="step-count">0</span></p>
+        <button id="mark-success-btn" class="btn btn-success hidden">Mark as Success</button>
+        <span id="success-marked-indicator" class="hidden">Success state captured</span>
       </div>
     </div>
 
@@ -36,6 +38,11 @@
 
       <div id="step-list" class="step-list">
         <!-- Steps will be rendered here -->
+      </div>
+
+      <div class="success-goal-section">
+        <label for="success-goal">What does success look like? (optional)</label>
+        <textarea id="success-goal" placeholder="e.g., Position opened, Order filled toast visible" rows="2"></textarea>
       </div>
 
       <div class="save-section">

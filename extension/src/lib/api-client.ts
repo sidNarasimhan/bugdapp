@@ -141,7 +141,8 @@ export async function uploadRecording(
   startUrl: string,
   steps: unknown[],
   metadata?: Record<string, unknown>,
-  options?: UploadOptions
+  options?: UploadOptions,
+  successState?: Record<string, unknown>
 ): Promise<UploadResult> {
   const settings = await getApiSettings();
 
@@ -174,6 +175,7 @@ export async function uploadRecording(
             source: 'web3-test-extension',
             uploadedAt: new Date().toISOString(),
           },
+          ...(successState ? { successState } : {}),
           exportedAt: new Date().toISOString(),
         },
         autoGenerate: options?.autoGenerate ?? true,

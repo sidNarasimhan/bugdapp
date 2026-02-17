@@ -115,6 +115,18 @@ export interface WalletStateDetectedMessage extends BaseMessage {
   walletAddress: string | null;
 }
 
+export interface CapturePageStateMessage extends BaseMessage {
+  type: 'CAPTURE_PAGE_STATE';
+}
+
+export interface CaptureSuccessStateMessage extends BaseMessage {
+  type: 'CAPTURE_SUCCESS_STATE';
+}
+
+export interface GetSuccessStateMessage extends BaseMessage {
+  type: 'GET_SUCCESS_STATE';
+}
+
 export type ExtensionMessage =
   | StartRecordingMessage
   | StopRecordingMessage
@@ -129,7 +141,10 @@ export type ExtensionMessage =
   | ClearRecordingMessage
   | GetRecordedStepsMessage
   | ConsoleLogMessage
-  | WalletStateDetectedMessage;
+  | WalletStateDetectedMessage
+  | CapturePageStateMessage
+  | CaptureSuccessStateMessage
+  | GetSuccessStateMessage;
 
 export type ExtensionResponse =
   | StartRecordingResponse

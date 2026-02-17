@@ -13,7 +13,7 @@
  */
 
 import { generateSelector, getElementMetadata, getParentOuterHTML, getNearbyVisibleText, getCurrentHeadingContext } from './selector';
-import type { RecordedStep } from './steps';
+import type { RecordedStep, SuccessSnapshot } from './steps';
 
 // Capture state
 let isCapturing = false;
@@ -411,6 +411,62 @@ export function initEventCapture(sessionId: string): void {
   window.addEventListener('popstate', handlePopState);
 
   console.log('Event capture initialized');
+}
+
+/**
+ * Capture current page state for success verification.
+ * Extracts visible text from the viewport for use in generating assertions.
+ * Returns snapshot data (no screenshot — that's handled by the background script).
+ */
+export function capturePageState(): Omit<SuccessSnapshot, 'screenshot'> {
+  const selectors = [
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'p', 'span', 'button', 'a',
+    '[role="alert"]', '[role="status"]',
+    'div[class*="toast"]', 'div[class*="success"]', 'div[class*="notification"]',
+    'div[class*="message"]', 'div[class*="banner"]',
+    'td', 'th', 'li', 'label',
+  ];
+
+  const seen = new Set<string>();
+  const visibleText: string[] = [];
+
+  for (const selector of selectors) {
+    try {
+      const elements = document.querySelectorAll(selector);
+      for (const el of elements) {
+        // Check if element is in viewport
+        const rect = el.getBoundingClientRect();
+        if (
+          rect.width === 0 || rect.height === 0 ||
+          rect.bottom < 0 || rect.top > window.innerHeight ||
+          rect.right < 0 || rect.left > window.innerWidth
+        ) {
+          continue;
+        }
+
+        // Get direct text content (not deeply nested child text)
+        const text = (el.textContent || '').trim();
+        if (text.length < 2 || text.length > 200) continue;
+        if (seen.has(text)) continue;
+
+        seen.add(text);
+        visibleText.push(text);
+
+        if (visibleText.length >= 50) break;
+      }
+    } catch {
+      // Skip invalid selectors
+    }
+    if (visibleText.length >= 50) break;
+  }
+
+  return {
+    visibleText,
+    url: window.location.href,
+    pageTitle: document.title,
+    timestamp: Date.now(),
+  };
 }
 
 /**

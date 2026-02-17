@@ -7,6 +7,7 @@
  */
 
 import type { ExtensionMessage, RecordedStep } from './types';
+import type { SuccessSnapshot, SuccessState } from './lib/steps';
 import {
   getRecordingState,
   setRecordingState,
@@ -107,6 +108,12 @@ async function handleMessage(
         (message as { walletAddress: string | null }).walletAddress
       );
 
+    case 'CAPTURE_SUCCESS_STATE':
+      return handleCaptureSuccessState();
+
+    case 'GET_SUCCESS_STATE':
+      return handleGetSuccessState();
+
     default:
       console.warn('Unknown message type:', message);
       return { success: false, error: 'Unknown message type' };
@@ -206,6 +213,22 @@ async function handleStopRecording(): Promise<{ success: boolean; error?: string
       cancelAllTracking();
     }
 
+    // Auto-capture stop snapshot BEFORE stopping the content script
+    if (state.tabId) {
+      try {
+        const stopSnapshot = await captureSnapshotFromTab(state.tabId);
+        if (stopSnapshot) {
+          const existing = await getSuccessStateFromStorage();
+          await chrome.storage.session.set({
+            successState: { ...existing, stopSnapshot },
+          });
+          console.log('[Background] Auto-captured stop snapshot');
+        }
+      } catch (snapshotErr) {
+        console.warn('[Background] Failed to capture stop snapshot:', snapshotErr);
+      }
+    }
+
     if (state.tabId) {
       // Notify content script to stop recording
       try {
@@ -252,13 +275,16 @@ async function handleGetRecordingState(): Promise<{
   success: boolean;
   state?: Awaited<ReturnType<typeof getRecordingState>>;
   hasSteps?: boolean;
+  hasMarkedSuccess?: boolean;
   error?: string;
 }> {
   try {
     const state = await getRecordingState();
     const steps = await getRecordedSteps();
     const hasSteps = steps.length > 0;
-    return { success: true, state, hasSteps };
+    const successState = await getSuccessStateFromStorage();
+    const hasMarkedSuccess = !!successState?.markedSnapshot;
+    return { success: true, state, hasSteps, hasMarkedSuccess };
   } catch (error) {
     console.error('Failed to get recording state:', error);
     return {
@@ -323,6 +349,7 @@ async function handleClearRecording(): Promise<{
   try {
     await clearRecordingState();
     await clearRecordedSteps();
+    await chrome.storage.session.remove('successState');
     console.log('[Background] Recording cleared');
     return { success: true };
   } catch (error) {
@@ -498,6 +525,106 @@ async function handleWalletStateDetected(
       error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
+}
+
+// ============================================================================
+// Success State Capture
+// ============================================================================
+
+/**
+ * Get success state from session storage
+ */
+async function getSuccessStateFromStorage(): Promise<SuccessState | null> {
+  try {
+    const result = await chrome.storage.session.get('successState');
+    return result.successState || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Capture a snapshot from the given tab (page state + screenshot)
+ */
+async function captureSnapshotFromTab(tabId: number): Promise<SuccessSnapshot | null> {
+  try {
+    // Get page state from content script
+    let pageState: { visibleText: string[]; url: string; pageTitle: string; timestamp: number } | null = null;
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, {
+        type: 'CAPTURE_PAGE_STATE',
+        timestamp: Date.now(),
+      }) as { success: boolean; pageState?: typeof pageState };
+      if (response?.success && response.pageState) {
+        pageState = response.pageState;
+      }
+    } catch (err) {
+      console.warn('[Background] Could not get page state from content script:', err);
+    }
+
+    // Capture screenshot
+    let screenshot: string | undefined;
+    try {
+      screenshot = await chrome.tabs.captureVisibleTab(
+        undefined as unknown as number,
+        { format: 'png' }
+      );
+    } catch (err) {
+      console.warn('[Background] Screenshot capture failed:', err);
+    }
+
+    if (!pageState && !screenshot) return null;
+
+    return {
+      visibleText: pageState?.visibleText || [],
+      url: pageState?.url || '',
+      pageTitle: pageState?.pageTitle || '',
+      screenshot,
+      timestamp: pageState?.timestamp || Date.now(),
+    };
+  } catch (error) {
+    console.error('[Background] captureSnapshotFromTab failed:', error);
+    return null;
+  }
+}
+
+/**
+ * Handle "Mark Success" button from popup
+ */
+async function handleCaptureSuccessState(): Promise<{ success: boolean; error?: string }> {
+  try {
+    const state = await getRecordingState();
+    if (!state.tabId) {
+      return { success: false, error: 'No active recording tab' };
+    }
+
+    const snapshot = await captureSnapshotFromTab(state.tabId);
+    if (!snapshot) {
+      return { success: false, error: 'Failed to capture page state' };
+    }
+
+    const existing = await getSuccessStateFromStorage();
+    await chrome.storage.session.set({
+      successState: { ...existing, markedSnapshot: snapshot },
+    });
+
+    console.log('[Background] Marked success state captured');
+    return { success: true };
+  } catch (error) {
+    console.error('[Background] Failed to capture success state:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
+/**
+ * Handle GET_SUCCESS_STATE request from popup
+ */
+async function handleGetSuccessState(): Promise<{ success: boolean; successState?: SuccessState | null }> {
+  const successState = await getSuccessStateFromStorage();
+  return { success: true, successState };
 }
 
 // Handle extension installation - registered synchronously at top level
