@@ -28,6 +28,10 @@ model Recording {
   projectId   String?
   project     Project? @relation(fields: [projectId], references: [id])
 
+  // Optional group association
+  groupId     String?
+  group       TestGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -37,6 +41,7 @@ model Recording {
   @@index([createdAt])
   @@index([dappUrl])
   @@index([projectId])
+  @@index([groupId])
 }
 
 // ============================================================================
@@ -265,8 +270,30 @@ model Project {
   // Relations
   recordings       Recording[]
   suiteRuns        SuiteRun[]
+  groups           TestGroup[]
 
   @@index([createdAt])
+}
+
+// ============================================================================
+// Test Groups - Organize recordings within a project
+// ============================================================================
+
+model TestGroup {
+  id          String      @id @default(cuid())
+  name        String
+  description String?
+  projectId   String
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  // Relations
+  recordings  Recording[]
+  suiteRuns   SuiteRun[]
+
+  @@index([projectId])
 }
 
 // ============================================================================
@@ -277,6 +304,10 @@ model SuiteRun {
   id            String      @id @default(cuid())
   projectId     String
   project       Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Optional group scoping
+  groupId       String?
+  group         TestGroup?  @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
   status        RunStatus   @default(PENDING)
   specIds       String[]    // Ordered TestSpec IDs
@@ -304,5 +335,6 @@ model SuiteRun {
   testRuns      TestRun[]
 
   @@index([projectId])
+  @@index([groupId])
   @@index([status])
 }

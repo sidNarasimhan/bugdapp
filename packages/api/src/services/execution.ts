@@ -263,7 +263,7 @@ class ExecutionService {
   }
 
   /**
-   * Queue a suite run for execution
+   * Queue a suite run for execution (legacy serial mode)
    */
   async queueSuiteRun(
     suiteRunId: string,
@@ -296,6 +296,66 @@ class ExecutionService {
       queued: true,
       message: 'Suite run queued for execution',
       jobId: job.id,
+    };
+  }
+
+  /**
+   * Queue a suite run for parallel execution — each TestRun as an independent job.
+   * Multiple executor workers can process these concurrently.
+   */
+  async queueParallelSuiteRun(
+    suiteRunId: string,
+  ): Promise<{ queued: boolean; message: string; jobCount?: number }> {
+    await this.initializeQueue();
+
+    // Fetch suite + its TestRun records
+    const suiteRun = await prisma.suiteRun.findUnique({
+      where: { id: suiteRunId },
+      include: {
+        testRuns: {
+          select: { id: true, streamingMode: true },
+        },
+      },
+    });
+
+    if (!suiteRun) {
+      return { queued: false, message: 'Suite run not found' };
+    }
+
+    // Mark suite as RUNNING
+    await prisma.suiteRun.update({
+      where: { id: suiteRunId },
+      data: { status: 'RUNNING', startedAt: new Date() },
+    });
+
+    if (!this.isQueueAvailable || !this.queue) {
+      return {
+        queued: false,
+        message: 'Queue not available. Suite is marked RUNNING but jobs are pending. Start the executor worker.',
+      };
+    }
+
+    // Queue each TestRun as an independent execute job
+    for (const testRun of suiteRun.testRuns) {
+      await this.queue.add(
+        'execute',
+        {
+          runId: testRun.id,
+          streamingMode: testRun.streamingMode || 'NONE',
+        },
+        {
+          jobId: `run-${testRun.id}`,
+          priority: 2,
+        }
+      );
+    }
+
+    console.log(`[ExecutionService] Queued ${suiteRun.testRuns.length} parallel jobs for suite ${suiteRunId}`);
+
+    return {
+      queued: true,
+      message: `${suiteRun.testRuns.length} test runs queued for parallel execution`,
+      jobCount: suiteRun.testRuns.length,
     };
   }
 

@@ -14,7 +14,7 @@ import { healthRoutes } from './routes/health.js';
 import { streamingRoutes } from './routes/streaming.js';
 import { apiKeysRoutes } from './routes/apikeys.js';
 import { artifactsRoutes } from './routes/artifacts.js';
-import { projectsRoutes, suiteRunsRoutes } from './routes/projects.js';
+import { projectsRoutes, suiteRunsRoutes, groupsRoutes } from './routes/projects.js';
 import { analysisRoutes } from './routes/analysis.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -99,6 +99,7 @@ async function buildServer() {
   await fastify.register(artifactsRoutes, { prefix: '/api/artifacts' });
   await fastify.register(projectsRoutes, { prefix: '/api/projects' });
   await fastify.register(suiteRunsRoutes, { prefix: '/api/suite-runs' });
+  await fastify.register(groupsRoutes, { prefix: '/api/groups' });
   await fastify.register(analysisRoutes, { prefix: '/api/analysis' });
 
   return fastify;

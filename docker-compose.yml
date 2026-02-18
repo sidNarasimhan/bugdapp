@@ -118,11 +118,11 @@ services:
       retries: 3
 
   # Executor Worker Service
+  # Scale with: docker compose up -d --scale executor=3
   executor:
     build:
       context: .
       dockerfile: docker/executor/Dockerfile
-    container_name: web3-test-executor
     restart: unless-stopped
     # Use tini as PID 1 to properly reap zombie Chrome/esbuild processes
     init: true
@@ -138,7 +138,7 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
       MINIO_BUCKET: artifacts
       ARTIFACTS_PATH: /app/artifacts
-      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
       VNC_PASSWORD: ${VNC_PASSWORD:-secret}
       DISPLAY: ":99"
       # Wallet setup for dappwright tests
@@ -153,9 +153,10 @@ services:
       AGENT_MODEL: ${AGENT_MODEL:-claude-haiku-4-5-20251001}
     volumes:
       - executor_artifacts:/app/artifacts
-    ports:
-      - "5900:5900"   # VNC
-      - "6080:6080"   # noVNC WebSocket
+    # Use expose instead of ports to allow --scale (no host port conflicts)
+    expose:
+      - "5900"   # VNC
+      - "6080"   # noVNC WebSocket
     depends_on:
       postgres:
         condition: service_healthy
@@ -167,20 +168,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 4G
+          memory: 6G
         reservations:
-          memory: 2G
-    # Security: need --shm-size for Chrome
-    shm_size: '2gb'
-
-  # Optional: Additional executor workers (scale as needed)
-  # executor-2:
-  #   extends:
-  #     service: executor
-  #   container_name: web3-test-executor-2
-  #   ports:
-  #     - "5901:5900"
-  #     - "6081:6080"
+          memory: 3G
+    # Security: need --shm-size for Chrome (needs headroom for parallel browsers)
+    shm_size: '3gb'
 
   # Initialize MinIO bucket
   minio-init:

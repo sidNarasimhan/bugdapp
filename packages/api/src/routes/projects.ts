@@ -10,6 +10,21 @@ interface CreateProjectBody {
   chainId?: number;
 }
 
+interface CreateGroupBody {
+  name: string;
+  description?: string;
+}
+
+interface UpdateGroupBody {
+  name?: string;
+  description?: string;
+}
+
+interface GroupParams {
+  id: string;
+  groupId: string;
+}
+
 interface UpdateProjectBody {
   name?: string;
   homeUrl?: string;
@@ -132,6 +147,12 @@ export async function projectsRoutes(fastify: FastifyInstance) {
     const project = await prisma.project.findUnique({
       where: { id },
       include: {
+        groups: {
+          orderBy: { createdAt: 'asc' },
+          include: {
+            _count: { select: { recordings: true } },
+          },
+        },
         recordings: {
           orderBy: { createdAt: 'desc' },
           include: {
@@ -177,6 +198,13 @@ export async function projectsRoutes(fastify: FastifyInstance) {
       dappContext: (project as { dappContext?: string | null }).dappContext || null,
       createdAt: project.createdAt.toISOString(),
       updatedAt: project.updatedAt.toISOString(),
+      groups: project.groups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        description: g.description,
+        recordingCount: g._count.recordings,
+        createdAt: g.createdAt.toISOString(),
+      })),
       recordings: project.recordings.map((r) => {
         const spec = r.testSpecs[0];
         const lastRun = spec?.testRuns?.[0];
@@ -187,6 +215,7 @@ export async function projectsRoutes(fastify: FastifyInstance) {
           stepCount: r.stepCount,
           chainId: r.chainId,
           walletName: r.walletName,
+          groupId: (r as { groupId?: string | null }).groupId || null,
           createdAt: r.createdAt.toISOString(),
           latestSpec: spec ? {
             id: spec.id,
@@ -404,8 +433,8 @@ export async function projectsRoutes(fastify: FastifyInstance) {
       });
     }
 
-    // Queue the suite execution
-    const queueResult = await executionService.queueSuiteRun(suiteRun.id);
+    // Queue parallel suite execution (each test as independent job)
+    const queueResult = await executionService.queueParallelSuiteRun(suiteRun.id);
 
     return reply.status(201).send({
       id: suiteRun.id,
@@ -468,6 +497,283 @@ export async function projectsRoutes(fastify: FastifyInstance) {
       limit,
       offset,
     };
+  });
+
+  // ============================================================================
+  // Test Group Routes
+  // ============================================================================
+
+  // Create a group within a project
+  fastify.post<{ Params: ProjectParams; Body: CreateGroupBody }>('/:id/groups', {
+    schema: {
+      tags: ['groups'],
+      summary: 'Create a test group within a project',
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+      body: {
+        type: 'object',
+        required: ['name'],
+        properties: {
+          name: { type: 'string' },
+          description: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: ProjectParams; Body: CreateGroupBody }>, reply: FastifyReply) => {
+    const { id } = request.params;
+    const { name, description } = request.body;
+
+    const project = await prisma.project.findUnique({ where: { id } });
+    if (!project) {
+      return reply.status(404).send({ error: 'Project not found' });
+    }
+
+    const group = await prisma.testGroup.create({
+      data: {
+        name,
+        description: description || null,
+        projectId: id,
+      },
+    });
+
+    return reply.status(201).send({
+      id: group.id,
+      name: group.name,
+      description: group.description,
+      projectId: group.projectId,
+      recordingCount: 0,
+      createdAt: group.createdAt.toISOString(),
+    });
+  });
+
+  // List groups for a project
+  fastify.get<{ Params: ProjectParams }>('/:id/groups', {
+    schema: {
+      tags: ['groups'],
+      summary: 'List test groups for a project',
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: ProjectParams }>) => {
+    const { id } = request.params;
+
+    const groups = await prisma.testGroup.findMany({
+      where: { projectId: id },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        _count: { select: { recordings: true } },
+      },
+    });
+
+    return {
+      groups: groups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        description: g.description,
+        projectId: g.projectId,
+        recordingCount: g._count.recordings,
+        createdAt: g.createdAt.toISOString(),
+      })),
+    };
+  });
+
+  // Run suite for a specific group
+  fastify.post<{ Params: GroupParams; Body: RunSuiteBody }>('/:id/groups/:groupId/run-suite', {
+    schema: {
+      tags: ['groups'],
+      summary: 'Run tests in a specific group',
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          groupId: { type: 'string' },
+        },
+        required: ['id', 'groupId'],
+      },
+      body: {
+        type: 'object',
+        properties: {
+          headless: { type: 'boolean', default: false },
+          streamingMode: { type: 'string', enum: ['NONE', 'VNC', 'VIDEO'], default: 'NONE' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: GroupParams; Body: RunSuiteBody }>, reply: FastifyReply) => {
+    const { id, groupId } = request.params;
+    const { headless = false, streamingMode = 'NONE' } = request.body || {};
+
+    const group = await prisma.testGroup.findUnique({
+      where: { id: groupId },
+    });
+    if (!group || group.projectId !== id) {
+      return reply.status(404).send({ error: 'Group not found' });
+    }
+
+    // Get recordings in this group with their specs
+    const recordings = await prisma.recording.findMany({
+      where: { projectId: id, groupId },
+      include: {
+        testSpecs: {
+          where: { status: { not: 'DRAFT' } },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    const specs = recordings
+      .filter((r) => r.testSpecs.length > 0)
+      .map((r) => ({
+        id: r.testSpecs[0].id,
+        code: r.testSpecs[0].code,
+        name: r.name,
+        isConnectTest: (r as { testType?: string }).testType === 'connection'
+          || r.testSpecs[0].code.includes('wallet.approve()'),
+      }));
+
+    if (specs.length === 0) {
+      return reply.status(400).send({
+        error: 'No test specs found in this group.',
+      });
+    }
+
+    specs.sort((a, b) => {
+      if (a.isConnectTest && !b.isConnectTest) return -1;
+      if (!a.isConnectTest && b.isConnectTest) return 1;
+      return 0;
+    });
+
+    const specIds = specs.map((s) => s.id);
+
+    const suiteRun = await prisma.suiteRun.create({
+      data: {
+        projectId: id,
+        groupId,
+        status: 'PENDING',
+        specIds,
+        totalTests: specs.length,
+        headless,
+        streamingMode: streamingMode as 'NONE' | 'VNC' | 'VIDEO',
+      },
+    });
+
+    // Create individual TestRun records
+    for (const spec of specs) {
+      await prisma.testRun.create({
+        data: {
+          testSpecId: spec.id,
+          status: 'PENDING',
+          headless,
+          streamingMode: streamingMode as 'NONE' | 'VNC' | 'VIDEO',
+          suiteRunId: suiteRun.id,
+        },
+      });
+    }
+
+    // Queue parallel execution
+    const queueResult = await executionService.queueParallelSuiteRun(suiteRun.id);
+
+    return reply.status(201).send({
+      id: suiteRun.id,
+      projectId: id,
+      groupId,
+      status: suiteRun.status,
+      totalTests: suiteRun.totalTests,
+      specIds,
+      queued: queueResult.queued,
+      message: queueResult.message,
+      createdAt: suiteRun.createdAt.toISOString(),
+    });
+  });
+}
+
+// ============================================================================
+// Group Routes (registered at /api/groups)
+// ============================================================================
+
+export async function groupsRoutes(fastify: FastifyInstance) {
+  // Update a group
+  fastify.put<{ Params: { id: string }; Body: UpdateGroupBody }>('/:id', {
+    schema: {
+      tags: ['groups'],
+      summary: 'Update a test group',
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+      body: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          description: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: UpdateGroupBody }>, reply: FastifyReply) => {
+    const { id } = request.params;
+    const { name, description } = request.body;
+
+    const existing = await prisma.testGroup.findUnique({ where: { id } });
+    if (!existing) {
+      return reply.status(404).send({ error: 'Group not found' });
+    }
+
+    const updated = await prisma.testGroup.update({
+      where: { id },
+      data: {
+        ...(name !== undefined && { name }),
+        ...(description !== undefined && { description }),
+      },
+      include: {
+        _count: { select: { recordings: true } },
+      },
+    });
+
+    return {
+      id: updated.id,
+      name: updated.name,
+      description: updated.description,
+      projectId: updated.projectId,
+      recordingCount: updated._count.recordings,
+      updatedAt: updated.updatedAt.toISOString(),
+    };
+  });
+
+  // Delete a group (nullifies recordings' groupId)
+  fastify.delete<{ Params: { id: string } }>('/:id', {
+    schema: {
+      tags: ['groups'],
+      summary: 'Delete a test group (recordings are kept but ungrouped)',
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    const { id } = request.params;
+
+    const existing = await prisma.testGroup.findUnique({ where: { id } });
+    if (!existing) {
+      return reply.status(404).send({ error: 'Group not found' });
+    }
+
+    // Unlink recordings before deleting group
+    await prisma.recording.updateMany({
+      where: { groupId: id },
+      data: { groupId: null },
+    });
+
+    await prisma.testGroup.delete({ where: { id } });
+
+    return { success: true };
   });
 }
 

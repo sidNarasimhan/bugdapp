@@ -48,6 +48,10 @@ COPY dappwright-test/test ./dappwright-test/test
 WORKDIR /app/dappwright-test
 RUN npm install
 
+# Patch dappwright to add Chrome performance flags (reduces CPU ~50% in containers)
+RUN sed -i "s|'--lang=en-US'|'--lang=en-US', '--disable-gpu', '--disable-software-rasterizer', '--disable-dev-shm-usage', '--no-sandbox', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'|" \
+    node_modules/@tenkeylabs/dappwright/dist/index.js node_modules/@tenkeylabs/dappwright/dist/index.umd.js
+
 # Default seed phrase - override SEED_PHRASE at runtime if needed
 ARG SEED_PHRASE="test test test test test test test test test test test junk"
 ENV SEED_PHRASE=${SEED_PHRASE}

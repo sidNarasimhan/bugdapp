@@ -8,6 +8,7 @@ dist/
 test-results/
 debug-screenshots/
 trace-debug/
+trace-close/
 .cache-synpress/
 *.tsbuildinfo
 .vscode/

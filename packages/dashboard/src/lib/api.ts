@@ -196,6 +196,16 @@ export interface PlatformStats {
 
 export interface ProjectRecording extends Recording {
   latestSpec?: LatestSpec | null;
+  groupId?: string | null;
+}
+
+export interface TestGroup {
+  id: string;
+  name: string;
+  description?: string;
+  projectId: string;
+  recordingCount: number;
+  createdAt: string;
 }
 
 export interface Project {
@@ -211,6 +221,7 @@ export interface Project {
   createdAt: string;
   updatedAt?: string;
   recordings?: ProjectRecording[];
+  groups?: TestGroup[];
   recentSuiteRuns?: SuiteRun[];
 }
 
@@ -352,7 +363,7 @@ class ApiClient {
 
   async updateRecording(
     id: string,
-    params: { name?: string; steps?: RecordingStep[]; autoRegenerate?: boolean }
+    params: { name?: string; steps?: RecordingStep[]; autoRegenerate?: boolean; groupId?: string | null }
   ): Promise<Recording & { testSpec?: { id: string; status: string }; generationError?: string }> {
     return this.request(`/recordings/${id}`, {
       method: 'PUT',
@@ -561,6 +572,35 @@ class ApiClient {
 
   async getSuiteRun(id: string): Promise<SuiteRun> {
     return this.request(`/suite-runs/${id}`);
+  }
+
+  // Groups
+  async createGroup(projectId: string, params: { name: string; description?: string }): Promise<TestGroup> {
+    return this.request(`/projects/${projectId}/groups`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async updateGroup(id: string, params: { name?: string; description?: string }): Promise<TestGroup> {
+    return this.request(`/groups/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async deleteGroup(id: string): Promise<void> {
+    await this.request(`/groups/${id}`, { method: 'DELETE' });
+  }
+
+  async runGroupSuite(projectId: string, groupId: string, options?: {
+    headless?: boolean;
+    streamingMode?: 'NONE' | 'VNC' | 'VIDEO';
+  }): Promise<SuiteRun & { queued: boolean; message: string }> {
+    return this.request(`/projects/${projectId}/groups/${groupId}/run-suite`, {
+      method: 'POST',
+      body: JSON.stringify(options || {}),
+    });
   }
 
   // Frames (screenshot player)

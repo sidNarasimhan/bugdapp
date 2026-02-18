@@ -4,7 +4,7 @@
  */
 
 import type { RecordedStep } from '../types';
-import { uploadRecording, canUploadToApi, getApiSettings, getProjects } from '../lib/api-client';
+import { uploadRecording, canUploadToApi, getApiSettings, getProjects, getGroups } from '../lib/api-client';
 
 // State
 let isRecording = false;
@@ -32,6 +32,8 @@ let errorMessage: HTMLElement;
 let recordingControls: HTMLElement;
 let settingsLink: HTMLElement;
 let projectSelect: HTMLSelectElement;
+let folderSelect: HTMLSelectElement;
+let folderSelectWrapper: HTMLElement;
 let markSuccessBtn: HTMLButtonElement;
 let successMarkedIndicator: HTMLElement;
 let successGoalTextarea: HTMLTextAreaElement;
@@ -64,6 +66,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   recordingControls = document.getElementById('recording-controls')!;
   settingsLink = document.getElementById('settings-link')!;
   projectSelect = document.getElementById('project-select') as HTMLSelectElement;
+  folderSelect = document.getElementById('folder-select') as HTMLSelectElement;
+  folderSelectWrapper = document.getElementById('folder-select-wrapper')!;
   markSuccessBtn = document.getElementById('mark-success-btn') as HTMLButtonElement;
   successMarkedIndicator = document.getElementById('success-marked-indicator')!;
   successGoalTextarea = document.getElementById('success-goal') as HTMLTextAreaElement;
@@ -87,6 +91,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   testNameInput.addEventListener('input', validateSaveButton);
   settingsLink?.addEventListener('click', openSettings);
   markSuccessBtn?.addEventListener('click', handleMarkSuccess);
+  projectSelect?.addEventListener('change', handleProjectChange);
 
   // Check if API is available
   checkApiAvailability();
@@ -119,6 +124,41 @@ async function checkApiAvailability() {
     } catch (e) {
       console.error('Failed to load projects:', e);
     }
+  }
+}
+
+/**
+ * Handle project dropdown change — fetch and populate folder dropdown
+ */
+async function handleProjectChange() {
+  const projectId = projectSelect?.value;
+
+  // Clear folder dropdown
+  if (folderSelect) {
+    while (folderSelect.options.length > 1) {
+      folderSelect.remove(1);
+    }
+    folderSelect.value = '';
+  }
+
+  if (!projectId) {
+    folderSelectWrapper?.classList.add('hidden');
+    return;
+  }
+
+  // Always show folder dropdown when a project is selected
+  folderSelectWrapper?.classList.remove('hidden');
+
+  try {
+    const groups = await getGroups(projectId);
+    for (const group of groups) {
+      const opt = document.createElement('option');
+      opt.value = group.id;
+      opt.textContent = group.name;
+      folderSelect.appendChild(opt);
+    }
+  } catch (e) {
+    console.error('Failed to load groups:', e);
   }
 }
 
@@ -526,7 +566,7 @@ async function handleUpload() {
         walletConnected,
         walletAddress,
       },
-      { autoGenerate: true, projectId: selectedProjectId },
+      { autoGenerate: true, projectId: selectedProjectId, groupId: folderSelect?.value || undefined },
       successState
     );
 

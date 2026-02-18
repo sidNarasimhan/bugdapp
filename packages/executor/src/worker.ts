@@ -162,6 +162,66 @@ function startCancelPoller(runId: string, onCancel: () => void, intervalMs = 500
 }
 
 /**
+ * Check if all TestRuns in a suite are terminal, and if so, update the SuiteRun.
+ * Called after each individual TestRun completes (for parallel execution).
+ */
+async function checkAndUpdateSuiteCompletion(testRunId: string): Promise<void> {
+  const db = await getPrisma();
+
+  // Look up the TestRun to get suiteRunId
+  const testRun = await db.testRun.findUnique({
+    where: { id: testRunId },
+    select: { suiteRunId: true },
+  });
+
+  if (!testRun?.suiteRunId) return; // Not part of a suite
+
+  const suiteRunId = testRun.suiteRunId;
+
+  // Query all TestRuns for this suite
+  const allTestRuns = await db.testRun.findMany({
+    where: { suiteRunId },
+    select: { status: true },
+  });
+
+  const terminalStatuses = ['PASSED', 'FAILED', 'CANCELLED', 'TIMEOUT'];
+  const allTerminal = allTestRuns.every((tr) => terminalStatuses.includes(tr.status));
+
+  if (!allTerminal) return; // Still running
+
+  const passedCount = allTestRuns.filter((tr) => tr.status === 'PASSED').length;
+  const failedCount = allTestRuns.filter((tr) => tr.status !== 'PASSED').length;
+  const allPassed = failedCount === 0;
+
+  // Compute duration from suite startedAt
+  const suiteRun = await db.suiteRun.findUnique({
+    where: { id: suiteRunId },
+    select: { startedAt: true, status: true },
+  });
+
+  // Don't update if already completed (race condition guard)
+  if (suiteRun?.status === 'PASSED' || suiteRun?.status === 'FAILED') return;
+
+  const now = new Date();
+  const durationMs = suiteRun?.startedAt
+    ? now.getTime() - suiteRun.startedAt.getTime()
+    : null;
+
+  await db.suiteRun.update({
+    where: { id: suiteRunId },
+    data: {
+      status: allPassed ? 'PASSED' : 'FAILED',
+      passedTests: passedCount,
+      failedTests: failedCount,
+      completedAt: now,
+      durationMs,
+    },
+  });
+
+  console.log(`[Worker] Suite ${suiteRunId} completed: ${passedCount}/${allTestRuns.length} passed`);
+}
+
+/**
  * Process a test run job
  */
 async function processTestRun(job: Job<TestRunJobData>): Promise<void> {
@@ -370,6 +430,9 @@ async function processTestRun(job: Job<TestRunJobData>): Promise<void> {
 
     console.log(`[Worker] Run ${runId} completed: ${result.passed ? 'PASSED' : 'FAILED'} (${result.artifacts.length} artifacts)`);
 
+    // Update suite aggregation if this run is part of a suite
+    await checkAndUpdateSuiteCompletion(runId);
+
     // HYBRID: if spec failed, launch agent to take over (replaces old self-heal loop)
     // Skip agent fallback for code bugs — these need a spec fix, not AI retry
     const isCodeBug = result.error && /ReferenceError|SyntaxError|TypeError|Cannot find module/.test(result.error);
@@ -421,6 +484,9 @@ async function processTestRun(job: Job<TestRunJobData>): Promise<void> {
         error: errorMessage,
       },
     });
+
+    // Update suite aggregation even on failure
+    await checkAndUpdateSuiteCompletion(runId);
 
     console.error(`[Worker] Run ${runId} failed:`, errorMessage);
     throw error;
@@ -986,6 +1052,9 @@ async function processAgentRun(job: Job<AgentRunJobData>): Promise<void> {
     await job.updateProgress(100);
     console.log(`[Worker] Agent run ${runId} completed: ${result.passed ? 'PASSED' : 'FAILED'} (${result.usage.totalApiCalls} API calls, ~$${result.usage.estimatedCostUsd.toFixed(3)})`);
 
+    // Update suite aggregation if this run is part of a suite
+    await checkAndUpdateSuiteCompletion(runId);
+
     // NO self-heal loop for agent mode — the agent adapts in real-time
   } catch (error) {
     stopPoller();
@@ -1007,6 +1076,9 @@ async function processAgentRun(job: Job<AgentRunJobData>): Promise<void> {
         error: errorMessage,
       },
     });
+
+    // Update suite aggregation even on failure
+    await checkAndUpdateSuiteCompletion(runId);
 
     console.error(`[Worker] Agent run ${runId} failed:`, errorMessage);
     throw error;
@@ -1308,6 +1380,9 @@ async function processHybridRun(job: Job<TestRunJobData>): Promise<void> {
     console.log(`[Worker] Hybrid run ${runId} completed: ${result.passed ? 'PASSED' : 'FAILED'} ` +
       `(${specSteps} spec + ${agentSteps} agent steps, ~$${result.totalAgentCostUsd.toFixed(3)})`);
 
+    // Update suite aggregation if this run is part of a suite
+    await checkAndUpdateSuiteCompletion(runId);
+
   } catch (error) {
     stopPoller();
 
@@ -1326,6 +1401,9 @@ async function processHybridRun(job: Job<TestRunJobData>): Promise<void> {
         error: errorMessage,
       },
     });
+
+    // Update suite aggregation even on failure
+    await checkAndUpdateSuiteCompletion(runId);
 
     console.error(`[Worker] Hybrid run ${runId} failed:`, errorMessage);
     throw error;
@@ -1433,8 +1511,8 @@ export async function startWorker(): Promise<Worker> {
       lockDuration: 300000, // 5 min lock — hybrid runs can take 2-3 min
       lockRenewTime: 60000, // Renew lock every 60s
       limiter: {
-        max: 5,
-        duration: 60000, // Max 5 jobs per minute
+        max: 10,
+        duration: 60000, // Max 10 jobs per minute
       },
     }
   );

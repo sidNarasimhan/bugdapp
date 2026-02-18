@@ -12,6 +12,7 @@ interface UploadRecordingBody {
   jsonData: unknown;
   autoGenerate?: boolean; // If true, automatically generate test spec after upload
   projectId?: string;     // Optional project association
+  groupId?: string;       // Optional group/folder association
 }
 
 interface GetRecordingParams {
@@ -30,6 +31,7 @@ interface UpdateRecordingBody {
   steps?: unknown[];
   autoRegenerate?: boolean; // If true, regenerate test spec after updating steps
   projectId?: string | null;
+  groupId?: string | null;
 }
 
 
@@ -71,6 +73,7 @@ export async function recordingsRoutes(fastify: FastifyInstance) {
           jsonData: { type: 'object', description: 'The recording JSON data' },
           autoGenerate: { type: 'boolean', description: 'Auto-generate test spec after upload', default: false },
           projectId: { type: 'string', description: 'Optional project ID to associate with' },
+          groupId: { type: 'string', description: 'Optional group/folder ID to assign to' },
         },
       },
       response: {
@@ -112,7 +115,7 @@ export async function recordingsRoutes(fastify: FastifyInstance) {
       return reply.status(401).send({ error: auth.error || 'Invalid API key' });
     }
 
-    const { name, jsonData, autoGenerate = false, projectId } = request.body;
+    const { name, jsonData, autoGenerate = false, projectId, groupId } = request.body;
 
     // Validate recording format
     const parseResult = RecordingSchema.safeParse(jsonData);
@@ -139,6 +142,7 @@ export async function recordingsRoutes(fastify: FastifyInstance) {
         walletName: analysis.detectedWallet || null,
         stepCount: recording.steps.length,
         projectId: projectId || null,
+        groupId: groupId || null,
       },
     });
 
@@ -429,6 +433,7 @@ export async function recordingsRoutes(fastify: FastifyInstance) {
           steps: { type: 'array', description: 'Updated steps array' },
           autoRegenerate: { type: 'boolean', description: 'Auto-regenerate test spec after updating steps', default: false },
           projectId: { type: ['string', 'null'], description: 'Project ID to associate (null to unlink)' },
+          groupId: { type: ['string', 'null'], description: 'Group ID to assign (null to ungroup)' },
         },
       },
       response: {
@@ -464,7 +469,7 @@ export async function recordingsRoutes(fastify: FastifyInstance) {
     },
   }, async (request: FastifyRequest<{ Params: GetRecordingParams; Body: UpdateRecordingBody }>, reply: FastifyReply) => {
     const { id } = request.params;
-    const { name, steps, autoRegenerate = false, projectId } = request.body;
+    const { name, steps, autoRegenerate = false, projectId, groupId } = request.body;
 
     // Check recording exists
     const existing = await prisma.recording.findUnique({
@@ -511,6 +516,7 @@ export async function recordingsRoutes(fastify: FastifyInstance) {
           stepCount
         }),
         ...(projectId !== undefined && { projectId }),
+        ...(groupId !== undefined && { groupId }),
         chainId,
         walletName,
       },

@@ -25,9 +25,15 @@ export interface UploadResult {
 export interface UploadOptions {
   autoGenerate?: boolean;
   projectId?: string;
+  groupId?: string;
 }
 
 export interface ProjectInfo {
+  id: string;
+  name: string;
+}
+
+export interface GroupInfo {
   id: string;
   name: string;
 }
@@ -134,6 +140,34 @@ export async function getProjects(): Promise<ProjectInfo[]> {
 }
 
 /**
+ * Fetch groups/folders for a project
+ */
+export async function getGroups(projectId: string): Promise<GroupInfo[]> {
+  const settings = await getApiSettings();
+  if (!settings.apiUrl) return [];
+
+  try {
+    const headers: Record<string, string> = { 'Accept': 'application/json' };
+    if (settings.apiKey) headers['X-API-Key'] = settings.apiKey;
+
+    const response = await fetch(`${settings.apiUrl}/api/projects/${projectId}/groups`, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!response.ok) return [];
+    const data = await response.json();
+    return (data.groups || []).map((g: { id: string; name: string }) => ({
+      id: g.id,
+      name: g.name,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Upload a recording to the API
  */
 export async function uploadRecording(
@@ -180,6 +214,7 @@ export async function uploadRecording(
         },
         autoGenerate: options?.autoGenerate ?? true,
         ...(options?.projectId ? { projectId: options.projectId } : {}),
+        ...(options?.groupId ? { groupId: options.groupId } : {}),
       }),
     });
 

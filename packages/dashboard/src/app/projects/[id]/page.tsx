@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
-import { api, type SuiteRun, type ProjectRecording, type LatestSpec } from '@/lib/api';
+import { api, type SuiteRun, type ProjectRecording, type LatestSpec, type TestGroup } from '@/lib/api';
 import { formatDate, formatDuration } from '@/lib/utils';
 import {
   ArrowLeft,
@@ -21,6 +21,10 @@ import {
   Sparkles,
   Ban,
   Trash2,
+  FolderOpen,
+  Pencil,
+  Check,
+  X,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
@@ -167,7 +171,7 @@ export default function ProjectDetailPage() {
         </div>
       )}
 
-      {/* Pipeline Cards */}
+      {/* Pipeline Cards — Grouped */}
       <div className="space-y-2 mb-6">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-sm font-medium text-white">Test Pipeline</h2>
@@ -180,19 +184,11 @@ export default function ProjectDetailPage() {
           </Link>
         </div>
 
-        {!project.recordings || project.recordings.length === 0 ? (
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-8 text-center text-zinc-500 text-sm">
-            No recordings yet. Upload a recording to get started.
-          </div>
-        ) : (
-          project.recordings.map((recording) => (
-            <RecordingPipelineCard
-              key={recording.id}
-              recording={recording}
-              projectId={id}
-            />
-          ))
-        )}
+        <GroupedRecordingsView
+          recordings={project.recordings || []}
+          groups={project.groups || []}
+          projectId={id}
+        />
       </div>
 
       {/* Suite Runs */}
@@ -222,15 +218,329 @@ export default function ProjectDetailPage() {
 }
 
 // ============================================================================
+// Grouped Recordings View
+// ============================================================================
+
+function GroupedRecordingsView({
+  recordings,
+  groups,
+  projectId,
+}: {
+  recordings: ProjectRecording[];
+  groups: TestGroup[];
+  projectId: string;
+}) {
+  const queryClient = useQueryClient();
+  const [showNewGroup, setShowNewGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+
+  const createGroupMutation = useMutation({
+    mutationFn: (name: string) => api.createGroup(projectId, { name }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+      setShowNewGroup(false);
+      setNewGroupName('');
+    },
+  });
+
+  // Build group map
+  const groupedMap = new Map<string | null, ProjectRecording[]>();
+  groupedMap.set(null, []);
+  for (const g of groups) {
+    groupedMap.set(g.id, []);
+  }
+  for (const r of recordings) {
+    const key = r.groupId || null;
+    if (!groupedMap.has(key)) {
+      groupedMap.set(null, [...(groupedMap.get(null) || []), r]);
+    } else {
+      groupedMap.get(key)!.push(r);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Empty state */}
+      {recordings.length === 0 && groups.length === 0 && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-8 text-center text-zinc-500 text-sm">
+          No recordings yet. Upload a recording to get started.
+        </div>
+      )}
+
+      {/* Named groups */}
+      {groups.map((group) => (
+        <GroupSection
+          key={group.id}
+          group={group}
+          recordings={groupedMap.get(group.id) || []}
+          projectId={projectId}
+        />
+      ))}
+
+      {/* Ungrouped recordings */}
+      {(groupedMap.get(null) || []).length > 0 && (
+        <div className="space-y-2">
+          {groups.length > 0 && (
+            <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider px-1">
+              Ungrouped
+            </h3>
+          )}
+          {(groupedMap.get(null) || []).map((recording) => (
+            <RecordingPipelineCard
+              key={recording.id}
+              recording={recording}
+              projectId={projectId}
+              groups={groups}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* New Group */}
+      {showNewGroup ? (
+        <div className="flex items-center gap-2 px-1">
+          <input
+            type="text"
+            value={newGroupName}
+            onChange={(e) => setNewGroupName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && newGroupName.trim()) {
+                createGroupMutation.mutate(newGroupName.trim());
+              }
+              if (e.key === 'Escape') {
+                setShowNewGroup(false);
+                setNewGroupName('');
+              }
+            }}
+            placeholder="Group name..."
+            className="flex-1 px-2 py-1 text-sm bg-zinc-800 border border-zinc-700 rounded text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-500"
+            autoFocus
+          />
+          <button
+            onClick={() => {
+              if (newGroupName.trim()) createGroupMutation.mutate(newGroupName.trim());
+            }}
+            disabled={!newGroupName.trim() || createGroupMutation.isPending}
+            className="p-1 text-green-400 hover:text-green-300 disabled:opacity-50"
+          >
+            <Check className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => { setShowNewGroup(false); setNewGroupName(''); }}
+            className="p-1 text-zinc-400 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setShowNewGroup(true)}
+          className="flex items-center text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-1"
+        >
+          <Plus className="h-3.5 w-3.5 mr-1" />
+          New Group
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// Group Section
+// ============================================================================
+
+function GroupSection({
+  group,
+  recordings,
+  projectId,
+}: {
+  group: TestGroup;
+  recordings: ProjectRecording[];
+  projectId: string;
+}) {
+  const queryClient = useQueryClient();
+  const [collapsed, setCollapsed] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(group.name);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const readyCount = recordings.filter(
+    (r) => r.latestSpec && (r.latestSpec.status === 'READY' || r.latestSpec.status === 'TESTED')
+  ).length;
+
+  const renameMutation = useMutation({
+    mutationFn: (name: string) => api.updateGroup(group.id, { name }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+      setEditing(false);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => api.deleteGroup(group.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+    },
+  });
+
+  const runGroupMutation = useMutation({
+    mutationFn: () => api.runGroupSuite(projectId, group.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+    },
+  });
+
+  return (
+    <div className="border border-zinc-800 rounded-lg overflow-hidden">
+      {/* Group header */}
+      <div className="flex items-center px-3 py-2 bg-zinc-900/50 border-b border-zinc-800">
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          className="mr-2 text-zinc-500 hover:text-white"
+        >
+          {collapsed ? (
+            <ChevronRight className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5" />
+          )}
+        </button>
+
+        <FolderOpen className="h-3.5 w-3.5 text-zinc-500 mr-2" />
+
+        {editing ? (
+          <div className="flex items-center gap-1 flex-1">
+            <input
+              type="text"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && editName.trim()) {
+                  renameMutation.mutate(editName.trim());
+                }
+                if (e.key === 'Escape') {
+                  setEditing(false);
+                  setEditName(group.name);
+                }
+              }}
+              className="flex-1 px-1.5 py-0.5 text-sm bg-zinc-800 border border-zinc-700 rounded text-white focus:outline-none focus:border-zinc-500"
+              autoFocus
+            />
+            <button
+              onClick={() => { if (editName.trim()) renameMutation.mutate(editName.trim()); }}
+              className="p-0.5 text-green-400 hover:text-green-300"
+            >
+              <Check className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => { setEditing(false); setEditName(group.name); }}
+              className="p-0.5 text-zinc-400 hover:text-white"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <>
+            <span className="text-sm font-medium text-white flex-1">
+              {group.name}
+            </span>
+            <span className="text-xs text-zinc-500 mr-3">
+              {recordings.length} test{recordings.length !== 1 ? 's' : ''}
+            </span>
+          </>
+        )}
+
+        {!editing && (
+          <div className="flex items-center gap-1.5">
+            {readyCount > 0 && (
+              <button
+                onClick={() => runGroupMutation.mutate()}
+                disabled={runGroupMutation.isPending}
+                className="flex items-center px-2 py-0.5 text-xs bg-white text-black rounded hover:bg-zinc-200 transition-colors disabled:opacity-50"
+              >
+                <Play className="h-3 w-3 mr-1" />
+                {runGroupMutation.isPending ? '...' : `Run (${readyCount})`}
+              </button>
+            )}
+            <button
+              onClick={() => setEditing(true)}
+              className="p-1 text-zinc-500 hover:text-white transition-colors"
+              title="Rename group"
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+            {!showDeleteConfirm ? (
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                className="p-1 text-zinc-500 hover:text-red-400 transition-colors"
+                title="Delete group"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            ) : (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => deleteMutation.mutate()}
+                  disabled={deleteMutation.isPending}
+                  className="px-1.5 py-0.5 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                >
+                  {deleteMutation.isPending ? '...' : 'Delete'}
+                </button>
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="px-1.5 py-0.5 text-xs text-zinc-400 border border-zinc-700 rounded hover:text-white"
+                >
+                  No
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {runGroupMutation.isError && (
+        <div className="px-3 py-1.5 text-xs text-red-400 bg-red-500/5">
+          {(runGroupMutation.error as Error).message}
+        </div>
+      )}
+
+      {/* Group recordings */}
+      {!collapsed && (
+        <div className="space-y-0 divide-y divide-zinc-800/50">
+          {recordings.length === 0 ? (
+            <div className="px-4 py-4 text-center text-zinc-500 text-xs">
+              No recordings in this group. Assign recordings using the dropdown.
+            </div>
+          ) : (
+            recordings.map((recording) => (
+              <RecordingPipelineCard
+                key={recording.id}
+                recording={recording}
+                projectId={projectId}
+                groups={[]}
+                inGroup
+              />
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
 // Recording Pipeline Card
 // ============================================================================
 
 function RecordingPipelineCard({
   recording,
   projectId,
+  groups = [],
+  inGroup = false,
 }: {
   recording: ProjectRecording;
   projectId: string;
+  groups?: TestGroup[];
+  inGroup?: boolean;
 }) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -286,6 +596,13 @@ function RecordingPipelineCard({
     },
   });
 
+  const assignGroupMutation = useMutation({
+    mutationFn: (groupId: string | null) => api.updateRecording(recording.id, { groupId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+    },
+  });
+
   const stages = computePipelineStages(
     spec ? {
       status: spec.status,
@@ -304,7 +621,7 @@ function RecordingPipelineCard({
   const isRunning = lastRun?.status === 'RUNNING' || lastRun?.status === 'PENDING';
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+    <div className={inGroup ? 'bg-zinc-900/30' : 'bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden'}>
       {/* Collapsed header */}
       <div
         className="flex items-center px-4 py-3 cursor-pointer hover:bg-zinc-800/30 transition-colors"
@@ -399,6 +716,26 @@ function RecordingPipelineCard({
             isRegenerating={regenerateMutation.isPending}
             generateError={generateMutation.error}
           />
+
+          {/* Group assignment */}
+          {groups.length > 0 && (
+            <div className="pt-3 border-t border-zinc-800">
+              <label className="text-xs text-zinc-500 mb-1 block">Group</label>
+              <select
+                value={recording.groupId || ''}
+                onChange={(e) => {
+                  const val = e.target.value || null;
+                  assignGroupMutation.mutate(val);
+                }}
+                className="px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-white focus:outline-none focus:border-zinc-500"
+              >
+                <option value="">Ungrouped</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Delete recording */}
           <div className="pt-3 border-t border-zinc-800">
