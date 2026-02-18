@@ -133,17 +133,20 @@ function captureStep(step: Omit<RecordedStep, 'id' | 'timestamp'>): void {
 function handleClick(event: MouseEvent): void {
   if (!isCapturing) return;
 
-  // Clear pending pointerdown — click fired normally, so pointerdown fallback not needed
-  if (pendingPointerdown) {
-    clearTimeout(pendingPointerdown.timer);
-    pendingPointerdown = null;
-  }
-
   const target = event.target as Element;
   const actionable = findActionableAncestor(target);
 
   if (!actionable) {
+    // Click landed on a non-actionable element (e.g., page behind a closed dialog).
+    // Do NOT clear the pending pointerdown — let the fallback timer fire so
+    // clicks on dialog buttons that close before mouseup are still captured.
     return;
+  }
+
+  // Actionable click found — clear pointerdown fallback since we'll capture this click directly
+  if (pendingPointerdown) {
+    clearTimeout(pendingPointerdown.timer);
+    pendingPointerdown = null;
   }
 
   // For input types that are click-based (checkbox, radio, button), capture the click

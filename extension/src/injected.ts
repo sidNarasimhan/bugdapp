@@ -16,6 +16,9 @@ let isWrapped = false;
 // Original ethereum provider reference
 let originalEthereum: EthereumProvider | null = null;
 
+// Reference to our patched request function — used to detect if window.ethereum got replaced
+let ourPatchedRequest: ((...args: unknown[]) => Promise<unknown>) | null = null;
+
 // EIP-6963 providers we've wrapped
 const wrappedProviders = new WeakSet<EthereumProvider>();
 
@@ -154,11 +157,11 @@ function wrapProvider(
  * This works even when window.ethereum is non-configurable (Rabby, MetaMask, etc.)
  */
 function wrapWindowEthereum(): void {
-  if (isWrapped || typeof window.ethereum === 'undefined') {
+  if (typeof window.ethereum === 'undefined') {
     return;
   }
 
-  const ethereum = window.ethereum;
+  const ethereum = window.ethereum as EthereumProvider;
 
   // Check if request method exists
   if (typeof ethereum.request !== 'function') {
@@ -166,12 +169,21 @@ function wrapWindowEthereum(): void {
     return;
   }
 
-  // Store original request method
-  const originalRequest = ethereum.request.bind(ethereum);
+  // If already wrapped AND our patch is still in place, skip
+  if (isWrapped && ourPatchedRequest && ethereum.request === ourPatchedRequest) {
+    return;
+  }
+
+  // Store original request method (skip if it's our own patched function)
+  const requestFn = ethereum.request;
+  if (requestFn === ourPatchedRequest) {
+    return; // Already patched
+  }
+  const originalRequest = requestFn.bind(ethereum);
 
   // Patch the request method directly (don't try to redefine window.ethereum)
   try {
-    ethereum.request = async function(args: { method: string; params?: unknown[] }): Promise<unknown> {
+    const patchedRequest = async function(args: { method: string; params?: unknown[] }): Promise<unknown> {
       const requestId = generateId();
       const { method, params } = args;
 
@@ -225,10 +237,31 @@ function wrapWindowEthereum(): void {
       }
     };
 
+    ethereum.request = patchedRequest;
+    ourPatchedRequest = patchedRequest as unknown as typeof ourPatchedRequest;
     isWrapped = true;
     console.log('[Web3Recorder] window.ethereum.request patched successfully');
   } catch (error) {
     console.error('[Web3Recorder] Failed to patch window.ethereum.request:', error);
+  }
+}
+
+/**
+ * Check if window.ethereum was replaced behind our back.
+ * MetaMask and other wallets can replace window.ethereum after page load.
+ */
+function checkEthereumIntegrity(): void {
+  if (typeof window.ethereum === 'undefined') return;
+
+  const ethereum = window.ethereum as EthereumProvider;
+  if (typeof ethereum.request !== 'function') return;
+
+  // If we have a patch reference and it doesn't match, window.ethereum was replaced
+  if (ourPatchedRequest && ethereum.request !== ourPatchedRequest) {
+    console.log('[Web3Recorder] window.ethereum was replaced! Re-wrapping...');
+    isWrapped = false;
+    ourPatchedRequest = null;
+    wrapWindowEthereum();
   }
 }
 
@@ -351,6 +384,17 @@ function pollForEthereum(): void {
 }
 
 /**
+ * Start periodic integrity check to detect window.ethereum replacement.
+ * Wallets like MetaMask can replace the provider after initial injection.
+ * Also re-wraps EIP-6963 providers that arrive later.
+ */
+function startIntegrityWatch(): void {
+  setInterval(() => {
+    checkEthereumIntegrity();
+  }, 2000); // Check every 2 seconds
+}
+
+/**
  * Listen for recording state messages from content script
  */
 function setupMessageListener(): void {
@@ -365,6 +409,15 @@ function setupMessageListener(): void {
     if (message?.type === 'SET_RECORDING') {
       isRecording = message.isRecording;
       console.log('[Web3Recorder] Recording state:', isRecording ? 'ON' : 'OFF');
+
+      // When recording starts, verify our patch is still in place
+      if (isRecording) {
+        checkEthereumIntegrity();
+        // Also try to wrap if not yet wrapped (late ethereum injection)
+        if (!isWrapped && typeof window.ethereum !== 'undefined') {
+          wrapWindowEthereum();
+        }
+      }
     }
   });
 }
@@ -399,6 +452,9 @@ function init(): void {
 
   // Set up EIP-6963 listener for modern wallet discovery
   setupEIP6963Listener();
+
+  // Start periodic check for window.ethereum replacement
+  startIntegrityWatch();
 
   console.log('[Web3Recorder] ====== INJECTED SCRIPT READY ======');
 }

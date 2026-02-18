@@ -3,6 +3,19 @@ import { ClaudeClient, createClaudeClient } from './claude-client.js';
 import { createPromptBuilder } from './prompt-builder.js';
 import { validateTypeScript } from './validator.js';
 
+/**
+ * Detect image media type from a data URL or raw base64.
+ * Screenshots may be PNG (legacy) or JPEG (new, smaller).
+ */
+function detectImageMediaType(dataUrl: string): 'image/png' | 'image/jpeg' {
+  if (dataUrl.startsWith('data:image/jpeg')) return 'image/jpeg';
+  if (dataUrl.startsWith('data:image/jpg')) return 'image/jpeg';
+  // JPEG magic bytes: /9j/ in base64
+  const raw = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+  if (raw.startsWith('/9j/')) return 'image/jpeg';
+  return 'image/png';
+}
+
 export interface CodeGeneratorOptions extends Partial<GenerationOptions> {
   apiKey?: string;
   model?: string;
@@ -41,17 +54,19 @@ export class CodeGenerator {
         .filter((s): s is typeof s & { screenshot: string } => 'screenshot' in s && typeof (s as Record<string, unknown>).screenshot === 'string')
         .slice(0, 10) // Limit to 10 screenshots to manage token cost
         .map((s) => {
-          // Strip data URL prefix if present
+          // Detect media type from data URL prefix, then strip it
+          const mediaType = detectImageMediaType(s.screenshot);
           const base64 = s.screenshot.replace(/^data:image\/\w+;base64,/, '');
-          return { base64, mediaType: 'image/png' as const };
+          return { base64, mediaType };
         });
 
       // Append success state screenshot if available
       const successState = (analysis.recording as unknown as { successState?: { markedSnapshot?: { screenshot?: string }; stopSnapshot?: { screenshot?: string } } }).successState;
       const successScreenshot = successState?.markedSnapshot?.screenshot || successState?.stopSnapshot?.screenshot;
       if (successScreenshot) {
+        const mediaType = detectImageMediaType(successScreenshot);
         const base64 = successScreenshot.replace(/^data:image\/\w+;base64,/, '');
-        stepScreenshots.push({ base64, mediaType: 'image/png' as const });
+        stepScreenshots.push({ base64, mediaType });
       }
 
       let code: string;

@@ -213,22 +213,9 @@ async function handleStopRecording(): Promise<{ success: boolean; error?: string
       cancelAllTracking();
     }
 
-    // Auto-capture stop snapshot BEFORE stopping the content script
-    if (state.tabId) {
-      try {
-        const stopSnapshot = await captureSnapshotFromTab(state.tabId);
-        if (stopSnapshot) {
-          const existing = await getSuccessStateFromStorage();
-          await chrome.storage.session.set({
-            successState: { ...existing, stopSnapshot },
-          });
-          console.log('[Background] Auto-captured stop snapshot');
-        }
-      } catch (snapshotErr) {
-        console.warn('[Background] Failed to capture stop snapshot:', snapshotErr);
-      }
-    }
-
+    // CRITICAL: Set isRecording=false FIRST — before any optional operations that might fail.
+    // If snapshot capture or storage fails (e.g., quota exceeded), we must NOT leave
+    // the recording state stuck as isRecording=true.
     if (state.tabId) {
       // Notify content script to stop recording
       try {
@@ -242,7 +229,11 @@ async function handleStopRecording(): Promise<{ success: boolean; error?: string
       }
 
       // Clear badge
-      await chrome.action.setBadgeText({ tabId: state.tabId, text: '' });
+      try {
+        await chrome.action.setBadgeText({ tabId: state.tabId, text: '' });
+      } catch {
+        // Tab might be closed
+      }
     }
 
     // Stop recording but preserve startUrl/startTime so the preview/upload can use them
@@ -258,9 +249,33 @@ async function handleStopRecording(): Promise<{ success: boolean; error?: string
     });
 
     console.log('Recording stopped');
+
+    // Auto-capture stop snapshot AFTER recording state is safely updated.
+    // This is optional — if it fails, the recording is still properly stopped.
+    if (state.tabId) {
+      try {
+        const stopSnapshot = await captureSnapshotFromTab(state.tabId);
+        if (stopSnapshot) {
+          const existing = await getSuccessStateFromStorage();
+          await chrome.storage.session.set({
+            successState: { ...existing, stopSnapshot },
+          });
+          console.log('[Background] Auto-captured stop snapshot');
+        }
+      } catch (snapshotErr) {
+        console.warn('[Background] Failed to capture stop snapshot:', snapshotErr);
+      }
+    }
+
     return { success: true };
   } catch (error) {
     console.error('Failed to stop recording:', error);
+    // Last-resort: force-clear recording state even if everything else failed
+    try {
+      await clearRecordingState();
+    } catch {
+      // If even clearing fails, storage is in a bad state — user needs to reload extension
+    }
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -406,12 +421,12 @@ async function handleStepCaptured(
       return { success: false, error: 'Session mismatch' };
     }
 
-    // Capture screenshot after click and web3 steps
+    // Capture screenshot after click and web3 steps (JPEG for smaller size)
     if ((step.type === 'click' || step.type === 'web3') && state.tabId) {
       try {
         const dataUrl = await chrome.tabs.captureVisibleTab(
           undefined as unknown as number, // current window
-          { format: 'png' }
+          { format: 'jpeg', quality: 40 }
         );
         step.screenshot = dataUrl;
       } catch (screenshotErr) {
@@ -420,8 +435,15 @@ async function handleStepCaptured(
       }
     }
 
-    // Store step and increment count
-    const stepCount = await addRecordedStep(step);
+    // Store step and increment count — if storage is full, strip screenshot and retry
+    let stepCount: number;
+    try {
+      stepCount = await addRecordedStep(step);
+    } catch (storageErr) {
+      console.warn('[Background] Storage full, stripping screenshot and retrying');
+      delete step.screenshot;
+      stepCount = await addRecordedStep(step);
+    }
     await setRecordingState({ stepCount });
 
     console.log('[Background] Step captured:', step.type, step.web3Method || step.selector, 'Total:', stepCount);
@@ -562,12 +584,12 @@ async function captureSnapshotFromTab(tabId: number): Promise<SuccessSnapshot | 
       console.warn('[Background] Could not get page state from content script:', err);
     }
 
-    // Capture screenshot
+    // Capture screenshot (JPEG for smaller size)
     let screenshot: string | undefined;
     try {
       screenshot = await chrome.tabs.captureVisibleTab(
         undefined as unknown as number,
-        { format: 'png' }
+        { format: 'jpeg', quality: 40 }
       );
     } catch (err) {
       console.warn('[Background] Screenshot capture failed:', err);
